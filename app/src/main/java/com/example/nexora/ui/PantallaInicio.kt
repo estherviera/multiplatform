@@ -1,4 +1,4 @@
-package com.example.nexora
+package com.example.nexora.ui
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,25 +20,28 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.nexora.data.Video
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PantallaInicio(
     videoViewModel: VideoViewModel,
-    abrirVideo: (String) -> Unit,
+    abrirVideo: (Int) -> Unit,
     irASubir: () -> Unit,
     irAPerfil: () -> Unit
 ) {
-    // Al abrir la pantalla cargamos los vídeos de Firestore
-    LaunchedEffect(Unit) {
-        videoViewModel.cargarVideos()
-    }
+    // La lista viene de Room y se actualiza sola cuando hay vídeos nuevos
+    val videos by videoViewModel.videos.collectAsState(initial = emptyList())
 
     Scaffold(
         topBar = {
@@ -57,13 +60,13 @@ fun PantallaInicio(
             }
         }
     ) { padding ->
-        if (videoViewModel.videos.isEmpty()) {
+        if (videos.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
                 Text("Todavía no hay vídeos. ¡Sube el primero con el botón +!")
             }
         } else {
             LazyColumn(modifier = Modifier.fillMaxSize().padding(padding)) {
-                items(videoViewModel.videos) { video ->
+                items(videos) { video ->
                     TarjetaVideo(video = video, alPulsar = { abrirVideo(video.id) })
                 }
             }
@@ -73,6 +76,7 @@ fun PantallaInicio(
 
 @Composable
 fun TarjetaVideo(video: Video, alPulsar: () -> Unit) {
+    val formato = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault())
     Card(
         onClick = alPulsar,
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
@@ -83,7 +87,7 @@ fun TarjetaVideo(video: Video, alPulsar: () -> Unit) {
                 Text(video.descripcion, maxLines = 2)
             }
             Text(
-                "Subido por " + video.autorEmail,
+                "Subido por ${video.autorNombre} · ${formato.format(Date(video.fecha))}",
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.primary
             )

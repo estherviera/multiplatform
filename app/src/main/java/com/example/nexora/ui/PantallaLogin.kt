@@ -1,4 +1,4 @@
-package com.example.nexora
+package com.example.nexora.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -14,6 +14,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -29,10 +30,13 @@ import androidx.compose.ui.unit.sp
 fun PantallaLogin(authViewModel: AuthViewModel, irARegistro: () -> Unit, alEntrar: () -> Unit) {
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    val usuario by authViewModel.usuario.collectAsState()
+    val cargando by authViewModel.cargando.collectAsState()
+    val error by authViewModel.error.collectAsState()
 
     // Cuando el login funciona, "usuario" deja de ser null y pasamos a la pantalla de inicio
-    LaunchedEffect(authViewModel.usuario) {
-        if (authViewModel.usuario != null) alEntrar()
+    LaunchedEffect(usuario) {
+        if (usuario != null) alEntrar()
     }
 
     Column(
@@ -61,18 +65,18 @@ fun PantallaLogin(authViewModel: AuthViewModel, irARegistro: () -> Unit, alEntra
             modifier = Modifier.fillMaxWidth()
         )
 
-        if (authViewModel.error != null) {
+        if (error != null) {
             Spacer(modifier = Modifier.height(8.dp))
-            Text(authViewModel.error!!, color = MaterialTheme.colorScheme.error)
+            Text(error!!, color = MaterialTheme.colorScheme.error)
         }
 
         Spacer(modifier = Modifier.height(16.dp))
         Button(
             onClick = { authViewModel.login(email, password) },
-            enabled = !authViewModel.cargando,
+            enabled = !cargando,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text(if (authViewModel.cargando) "Entrando..." else "Entrar")
+            Text(if (cargando) "Entrando..." else "Entrar")
         }
         TextButton(onClick = irARegistro) {
             Text("¿No tienes cuenta? Regístrate")
@@ -82,12 +86,16 @@ fun PantallaLogin(authViewModel: AuthViewModel, irARegistro: () -> Unit, alEntra
 
 @Composable
 fun PantallaRegistro(authViewModel: AuthViewModel, volver: () -> Unit, alEntrar: () -> Unit) {
+    var nombre by remember { mutableStateOf("") }
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var password2 by remember { mutableStateOf("") }
+    val usuario by authViewModel.usuario.collectAsState()
+    val cargando by authViewModel.cargando.collectAsState()
+    val error by authViewModel.error.collectAsState()
 
-    LaunchedEffect(authViewModel.usuario) {
-        if (authViewModel.usuario != null) alEntrar()
+    LaunchedEffect(usuario) {
+        if (usuario != null) alEntrar()
     }
 
     Column(
@@ -98,6 +106,14 @@ fun PantallaRegistro(authViewModel: AuthViewModel, volver: () -> Unit, alEntrar:
         Text("Crear cuenta", fontSize = 28.sp, fontWeight = FontWeight.Bold)
         Spacer(modifier = Modifier.height(24.dp))
 
+        OutlinedTextField(
+            value = nombre,
+            onValueChange = { nombre = it },
+            label = { Text("Nombre") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(modifier = Modifier.height(8.dp))
         OutlinedTextField(
             value = email,
             onValueChange = { email = it },
@@ -124,18 +140,18 @@ fun PantallaRegistro(authViewModel: AuthViewModel, volver: () -> Unit, alEntrar:
             modifier = Modifier.fillMaxWidth()
         )
 
-        if (authViewModel.error != null) {
+        if (error != null) {
             Spacer(modifier = Modifier.height(8.dp))
-            Text(authViewModel.error!!, color = MaterialTheme.colorScheme.error)
+            Text(error!!, color = MaterialTheme.colorScheme.error)
         }
 
         Spacer(modifier = Modifier.height(16.dp))
         Button(
-            onClick = { authViewModel.registrar(email, password, password2) },
-            enabled = !authViewModel.cargando,
+            onClick = { authViewModel.registrar(nombre, email, password, password2) },
+            enabled = !cargando,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text(if (authViewModel.cargando) "Creando cuenta..." else "Registrarme")
+            Text(if (cargando) "Creando cuenta..." else "Registrarme")
         }
         TextButton(onClick = volver) {
             Text("Ya tengo cuenta")

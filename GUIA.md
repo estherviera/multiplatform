@@ -1,42 +1,70 @@
-# Nexora: guía paso a paso en Android Studio
+# Nexora: app Android de vídeos
 
-App sencilla en **Kotlin + Jetpack Compose** con:
-- Inicio de sesión y registro (Firebase Authentication)
-- Subida de vídeos (Firebase Storage para el archivo y Firestore para los datos)
+App nativa en **Kotlin + Jetpack Compose** con:
+- Registro, inicio de sesión y cierre de sesión
+- Subida de vídeos desde la galería del móvil
 - Lista de vídeos y reproductor (ExoPlayer / Media3)
+- Borrar tus propios vídeos
 
-## Cómo está organizado (MVVM sencillo)
+Todo se guarda **en el propio móvil**: usuarios y vídeos en una base de datos **Room**,
+la sesión en **DataStore** y los archivos de vídeo en el **almacenamiento interno** de la app.
+No hace falta crear ninguna cuenta en internet para probarla.
+
+## Cómo abrirla
+
+1. Android Studio → **Clone Repository** → `https://github.com/estherviera/multiplatform.git`
+2. Espera a que termine el *Gradle sync* (barra de abajo a la derecha).
+3. Pulsa ▶ **Run** con un emulador.
+4. Para tener un vídeo en el emulador, **arrastra un .mp4 desde tu PC** encima de la ventana del emulador.
+
+## Estructura (MVVM)
 
 ```
 com.example.nexora
-├── MainActivity.kt          → arranca la app y define la navegación entre pantallas
-├── Video.kt                 → modelo de datos de un vídeo
-├── AuthViewModel.kt         → lógica de login, registro y cierre de sesión
-├── VideoViewModel.kt        → lógica para cargar y subir vídeos
-├── PantallaLogin.kt         → pantallas de Login y Registro
-├── PantallaInicio.kt        → lista de vídeos
-├── PantallaSubir.kt         → formulario para subir un vídeo
-├── PantallaReproductor.kt   → reproduce un vídeo
-└── PantallaPerfil.kt        → email del usuario y botón de cerrar sesión
+├── MainActivity.kt            → única Activity y navegación entre pantallas
+├── data/                      → MODELO (datos)
+│   ├── Usuario.kt             → @Entity tabla "usuarios"
+│   ├── Video.kt               → @Entity tabla "videos"
+│   ├── UsuarioDao.kt          → consultas de usuarios
+│   ├── VideoDao.kt            → consultas de vídeos (devuelve Flow)
+│   ├── NexoraDatabase.kt      → base de datos Room (patrón Singleton)
+│   ├── SesionManager.kt       → guarda la sesión con DataStore
+│   └── NexoraRepository.kt    → repositorio: único acceso a los datos
+└── ui/                        → VISTA y VIEWMODEL
+    ├── AuthViewModel.kt       → login, registro, cerrar sesión (StateFlow)
+    ├── VideoViewModel.kt      → lista, subir y borrar vídeos
+    ├── PantallaLogin.kt       → pantallas de Login y Registro
+    ├── PantallaInicio.kt      → lista de vídeos
+    ├── PantallaSubir.kt       → formulario para subir un vídeo
+    ├── PantallaReproductor.kt → reproduce un vídeo
+    └── PantallaPerfil.kt      → datos del usuario y cerrar sesión
 ```
 
-- **Model**: `Video`
-- **View**: las pantallas (`Pantalla...`), que solo muestran datos y avisan al ViewModel
-- **ViewModel**: `AuthViewModel` y `VideoViewModel`, que hablan con Firebase
+Flujo de datos: **Pantalla → ViewModel → Repositorio → Room / DataStore / archivos**,
+y los datos vuelven a la pantalla con `StateFlow` y `Flow`, que se observan con `collectAsState()`.
 
-## Datos guardados
+## Base de datos
 
-**Usuario**: lo gestiona Firebase Authentication (email, contraseña y un id único).
+**Tabla `usuarios`**
 
-**Vídeo**: colección `videos` de Firestore:
-
-| Campo | Tipo | Ejemplo |
+| Campo | Tipo | Notas |
 |---|---|---|
-| titulo | String | "Introducción al diseño UX" |
-| descripcion | String | "Primera lección del curso" |
-| url | String | enlace al archivo en Storage |
-| autorEmail | String | "ana@correo.com" |
-| fecha | Long | 1763380000000 (milisegundos) |
+| id | Int | clave primaria autogenerada |
+| nombre | String | |
+| email | String | único |
+| passwordHash | String | contraseña cifrada con SHA-256 |
+
+**Tabla `videos`**
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| id | Int | clave primaria autogenerada |
+| titulo | String | |
+| descripcion | String | |
+| rutaArchivo | String | ruta del vídeo en el almacenamiento interno |
+| autorEmail | String | quién lo subió |
+| autorNombre | String | |
+| fecha | Long | milisegundos |
 
 ## Navegación
 
@@ -49,126 +77,32 @@ inicio ──► reproductor/{videoId}
   │ └────► perfil ──(cerrar sesión)──► login
 ```
 
----
+## Qué temas de la asignatura se usan y dónde
 
-> ✅ Los pasos 1, 3, 4 y 5 ya están hechos en este proyecto. Si clonas el repositorio,
-> solo te falta poner tu `google-services.json` (Paso 2) si no está ya en `app/`.
+| Tema de clase | Dónde está en el código |
+|---|---|
+| Arquitectura base y componentes (Activity) | `MainActivity.kt`: una sola Activity con Compose |
+| Callbacks del ciclo de vida | `PantallaReproductor.kt`: pausa el vídeo en `ON_STOP` y libera el reproductor al salir |
+| Corrutinas (`viewModelScope.launch`, `withContext(Dispatchers.IO)`, `suspend`) | ViewModels y `NexoraRepository.kt` (copiar el vídeo se hace en `Dispatchers.IO`) |
+| Patrones de diseño: Singleton | `NexoraDatabase.kt` (una sola instancia de la base de datos) |
+| Patrones de diseño: Observer | `Flow`/`StateFlow` observados por las pantallas con `collectAsState()` |
+| Patrones de diseño: Facade | `NexoraRepository.kt` (oculta Room, DataStore y archivos a los ViewModels) |
+| Diseño de interfaces con Jetpack Compose y Material 3 | Carpeta `ui/` (`Scaffold`, `LazyColumn`, `Card`, `TopAppBar`...) |
+| Interoperabilidad XML–Compose | `PantallaReproductor.kt`: `AndroidView` con `PlayerView` |
+| Bases de datos: Room (Entity, DAO, Database, Repository) | Carpeta `data/` |
+| Bases de datos: DataStore | `SesionManager.kt` |
+| Bases de datos: ficheros internos | `NexoraRepository.subirVideo()` guarda el vídeo en `filesDir/videos` |
+| GitHub Actions | `.github/workflows/android.yml`: compila y pasa los tests en cada push |
 
-## Paso 1: crear el proyecto
+## Trabajar en grupo con GitHub
 
-1. **File → New → New Project → Empty Activity**
-2. Name: `Nexora`
-3. Package name: `com.example.nexora` (importante: tiene que coincidir con el de los archivos)
-4. Language: Kotlin. Minimum SDK: **API 26**. Build configuration language: Kotlin DSL.
-5. Pulsa **Finish** y espera a que termine de sincronizar (la primera vez tarda bastante).
-
-## Paso 2: crear el proyecto de Firebase
-
-1. Entra en https://console.firebase.google.com y crea un proyecto llamado "Nexora".
-2. Pulsa el icono de **Android** para añadir una app:
-   - Nombre del paquete: `com.example.nexora`
-   - Descarga el archivo **google-services.json**
-3. En Android Studio, cambia la vista del panel izquierdo de "Android" a **"Project"** y
-   arrastra `google-services.json` dentro de la carpeta **`app/`**.
-4. En la consola de Firebase, activa:
-   - **Authentication → Sign-in method → Correo electrónico/contraseña**
-   - **Firestore Database → Crear base de datos** (en modo de prueba)
-   - **Storage → Comenzar**
-
-> ⚠️ En los proyectos nuevos, Firebase Storage pide activar el **plan Blaze** (hay que poner
-> una tarjeta, pero para un proyecto de clase no se pasa de la parte gratuita).
-> Si no puedes, díselo a tu profesor/a: se puede cambiar por otro almacenamiento.
-
-## Paso 3: añadir las librerías
-
-**`build.gradle.kts` (el de la raíz, "Project: Nexora")**: dentro de `plugins { }` añade:
-
-```kotlin
-id("com.google.gms.google-services") version "4.4.2" apply false
-```
-
-**`app/build.gradle.kts` (el de "Module :app")**:
-
-Dentro de `plugins { }` añade:
-
-```kotlin
-id("com.google.gms.google-services")
-```
-
-Dentro de `dependencies { }` añade:
-
-```kotlin
-// Navegación entre pantallas y ViewModel
-implementation("androidx.navigation:navigation-compose:2.8.5")
-implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
-implementation("androidx.compose.material:material-icons-core")
-
-// Firebase
-implementation(platform("com.google.firebase:firebase-bom:33.7.0"))
-implementation("com.google.firebase:firebase-auth")
-implementation("com.google.firebase:firebase-firestore")
-implementation("com.google.firebase:firebase-storage")
-
-// Reproductor de vídeo
-implementation("androidx.media3:media3-exoplayer:1.5.1")
-implementation("androidx.media3:media3-ui:1.5.1")
-```
-
-Pulsa **Sync Now** (aparece arriba en amarillo).
-
-## Paso 4: permiso de Internet
-
-En `app/src/main/AndroidManifest.xml`, justo encima de `<application`, añade:
-
-```xml
-<uses-permission android:name="android.permission.INTERNET" />
-```
-
-## Paso 5: copiar el código
-
-Copia los 9 archivos `.kt` de la carpeta `codigo/` dentro de
-`app/src/main/java/com/example/nexora/`, **sustituyendo** el `MainActivity.kt` que crea Android Studio.
-(La carpeta `ui/theme` que crea Android Studio puede quedarse, no molesta.)
-
-## Paso 6: reglas de seguridad de Firebase
-
-Para que solo los usuarios con sesión iniciada puedan leer y subir:
-
-**Firestore → Reglas**
-```
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-    match /videos/{id} {
-      allow read, write: if request.auth != null;
-    }
-  }
-}
-```
-
-**Storage → Reglas**
-```
-rules_version = '2';
-service firebase.storage {
-  match /b/{bucket}/o {
-    match /videos/{archivo} {
-      allow read, write: if request.auth != null;
-    }
-  }
-}
-```
-
-## Paso 7: probarla
-
-1. Crea un emulador (**Device Manager → +**) o conecta tu móvil con la depuración USB activada.
-2. Pulsa ▶ **Run**.
-3. Regístrate, pulsa **+**, elige un vídeo, ponle título y súbelo.
-   - En el emulador, para tener un vídeo en la galería, **arrastra un .mp4 desde tu PC**
-     encima de la ventana del emulador.
-4. Vuelve atrás, pulsa el vídeo de la lista y debería reproducirse.
+- **Al empezar**: Git → **Pull** (Ctrl+T) para bajar lo de las demás.
+- **Al terminar**: **Commit** (Ctrl+K) y **Push** (Ctrl+Shift+K).
+- Repartíos los archivos para no tocar el mismo a la vez.
+- En la pestaña **Actions** de GitHub se ve si la app sigue compilando tras cada push (✅ o ❌).
 
 ## Ideas para seguir
 
-- Añadir empresas y cursos (como en el prototipo web): una colección `empresas` y un campo `empresaId` en cada vídeo.
+- Añadir empresas y cursos (como en el prototipo web): una tabla `empresas` y un campo `empresaId` en cada vídeo.
 - Mostrar una miniatura de cada vídeo en la lista.
-- Que solo puedan subir vídeos los usuarios con rol de profesor o administrador.
+- Sincronizar con un servidor en la nube: el repositorio es el sitio donde se añadiría.

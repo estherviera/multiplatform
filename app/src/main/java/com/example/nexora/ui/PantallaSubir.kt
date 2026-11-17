@@ -1,4 +1,4 @@
-package com.example.nexora
+package com.example.nexora.ui
 
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -23,6 +23,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -32,10 +33,13 @@ import androidx.compose.ui.unit.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PantallaSubir(videoViewModel: VideoViewModel, volver: () -> Unit) {
+fun PantallaSubir(videoViewModel: VideoViewModel, authViewModel: AuthViewModel, volver: () -> Unit) {
     var titulo by remember { mutableStateOf("") }
     var descripcion by remember { mutableStateOf("") }
     var videoElegido by remember { mutableStateOf<Uri?>(null) }
+    val usuario by authViewModel.usuario.collectAsState()
+    val subiendo by videoViewModel.subiendo.collectAsState()
+    val mensaje by videoViewModel.mensaje.collectAsState()
 
     // Abre la galería del móvil para elegir un vídeo
     val selectorDeVideo = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -89,28 +93,29 @@ fun PantallaSubir(videoViewModel: VideoViewModel, volver: () -> Unit) {
             Button(
                 onClick = {
                     val uri = videoElegido
-                    if (uri != null) {
-                        videoViewModel.subirVideo(uri, titulo, descripcion)
+                    val autor = usuario
+                    if (uri != null && autor != null) {
+                        videoViewModel.subirVideo(uri, titulo, descripcion, autor)
+                        videoElegido = null
+                        titulo = ""
+                        descripcion = ""
                     }
                 },
-                enabled = videoElegido != null && !videoViewModel.subiendo,
+                enabled = videoElegido != null && !subiendo,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text("Subir vídeo")
             }
 
-            if (videoViewModel.subiendo) {
+            if (subiendo) {
                 Spacer(modifier = Modifier.height(16.dp))
-                LinearProgressIndicator(
-                    progress = { videoViewModel.progreso },
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Text("Subiendo... ${(videoViewModel.progreso * 100).toInt()}%")
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                Text("Guardando el vídeo...")
             }
 
-            if (videoViewModel.mensaje != null) {
+            if (mensaje != null) {
                 Spacer(modifier = Modifier.height(16.dp))
-                Text(videoViewModel.mensaje!!)
+                Text(mensaje!!)
             }
         }
     }

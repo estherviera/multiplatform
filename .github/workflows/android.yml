@@ -1,0 +1,29 @@
+# Integración continua con GitHub Actions:
+# cada vez que alguien del grupo hace push o un pull request,
+# GitHub compila la app y ejecuta los tests automáticamente.
+name: Android CI
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar el código
+        uses: actions/checkout@v4
+
+      - name: Instalar JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Dar permisos a gradlew
+        run: chmod +x gradlew
+
+      - name: Compilar la app
+        run: ./gradlew assembleDebug
+
+      - name: Ejecutar los tests
+        run: ./gradlew test

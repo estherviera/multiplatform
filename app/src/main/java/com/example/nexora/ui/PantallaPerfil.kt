@@ -1,4 +1,4 @@
-package com.example.nexora
+package com.example.nexora.ui
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -16,6 +16,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -23,7 +25,16 @@ import androidx.compose.ui.unit.sp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PantallaPerfil(authViewModel: AuthViewModel, volver: () -> Unit, alCerrarSesion: () -> Unit) {
+fun PantallaPerfil(
+    authViewModel: AuthViewModel,
+    videoViewModel: VideoViewModel,
+    volver: () -> Unit,
+    alCerrarSesion: () -> Unit
+) {
+    val usuario by authViewModel.usuario.collectAsState()
+    val videos by videoViewModel.videos.collectAsState(initial = emptyList())
+    val misVideos = videos.count { it.autorEmail == usuario?.email }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -37,20 +48,12 @@ fun PantallaPerfil(authViewModel: AuthViewModel, volver: () -> Unit, alCerrarSes
         }
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
-            Text("Sesión iniciada como:")
-            Text(
-                authViewModel.usuario?.email ?: "",
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold
-            )
+            Text(usuario?.nombre ?: "", fontSize = 24.sp, fontWeight = FontWeight.Bold)
+            Text(usuario?.email ?: "")
+            Spacer(modifier = Modifier.height(16.dp))
+            Text("Vídeos subidos: $misVideos")
             Spacer(modifier = Modifier.height(32.dp))
-            Button(
-                onClick = {
-                    authViewModel.cerrarSesion()
-                    alCerrarSesion()
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) {
+            Button(onClick = alCerrarSesion, modifier = Modifier.fillMaxWidth()) {
                 Text("Cerrar sesión")
             }
         }
