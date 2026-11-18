@@ -3,142 +3,208 @@ package com.example.nexora
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.lightColorScheme
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
-import androidx.compose.ui.Alignment
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.navigation.compose.NavHost
-import androidx.navigation.compose.composable
-import androidx.navigation.compose.rememberNavController
-import com.example.nexora.ui.AuthViewModel
-import com.example.nexora.ui.PantallaInicio
-import com.example.nexora.ui.PantallaLogin
-import com.example.nexora.ui.PantallaPerfil
-import com.example.nexora.ui.PantallaRegistro
-import com.example.nexora.ui.PantallaReproductor
-import com.example.nexora.ui.PantallaSubir
-import com.example.nexora.ui.VideoViewModel
+import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.NavHostController
+import androidx.navigation.NavType
+import androidx.navigation.compose.*
+import androidx.navigation.navArgument
+import com.example.nexora.data.NexoraRepository
+import com.example.nexora.ui.*
 
-// Única Activity de la app: todas las pantallas son funciones @Composable
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         setContent {
-            // Colores del prototipo web de Nexora
-            val colores = lightColorScheme(
-                primary = Color(0xFF6656E8),
-                secondary = Color(0xFF20A98B)
-            )
-            MaterialTheme(colorScheme = colores) {
-                App()
+            MaterialTheme(
+                colorScheme = lightColorScheme(
+                    primary = Color(0xFF6656E8),
+                    secondary = Color(0xFF20A98B),
+                    background = Color(0xFFF8F7FC),
+                    surface = Color.White
+                )
+            ) {
+                val context = LocalContext.current
+                val repo = remember { NexoraRepository(context) }
+                val authViewModel: AuthViewModel = viewModel()
+                val videoViewModel: VideoViewModel = viewModel()
+                val nexoraViewModel: NexoraViewModel = viewModel()
+                val sesionIniciada by authViewModel.sesionIniciada.collectAsState()
+
+                if (sesionIniciada) {
+                    AppPrincipal(
+                        authViewModel = authViewModel,
+                        videoViewModel = videoViewModel,
+                        nexoraViewModel = nexoraViewModel
+                    )
+                } else {
+                    PantallaLogin(
+                        viewModel = authViewModel,
+                        onRegistro = {}
+                    )
+                }
             }
         }
     }
 }
 
-@Composable
-fun App() {
-    val authViewModel: AuthViewModel = viewModel()
-    val videoViewModel: VideoViewModel = viewModel()
-    val comprobandoSesion by authViewModel.comprobandoSesion.collectAsState()
-
-    // Mientras miramos si había una sesión guardada, mostramos un círculo de carga
-    if (comprobandoSesion) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator()
-        }
-    } else {
-        Navegacion(authViewModel, videoViewModel)
-    }
+// === Destinos del bottom bar ===
+sealed class Destino(val ruta: String, val titulo: String, val icono: ImageVector) {
+    data object Explorar : Destino("explorar", "Inicio", Icons.Default.Home)
+    data object Empresas : Destino("empresas", "Comunidades", Icons.Default.Star)
+    data object MisCursos : Destino("mis_cursos", "Mis Cursos", Icons.Default.PlayArrow)
+    data object Admin : Destino("admin", "Admin", Icons.Default.Settings)
+    data object Perfil : Destino("perfil", "Perfil", Icons.Default.Person)
 }
 
-// Aquí se definen todas las pantallas y cómo se pasa de una a otra
 @Composable
-fun Navegacion(authViewModel: AuthViewModel, videoViewModel: VideoViewModel) {
+fun AppPrincipal(
+    authViewModel: AuthViewModel,
+    videoViewModel: VideoViewModel,
+    nexoraViewModel: NexoraViewModel
+) {
     val navController = rememberNavController()
-    // Si ya había sesión iniciada empezamos en "inicio", si no en "login" (solo se decide una vez)
-    val pantallaInicial = remember { if (authViewModel.usuario.value != null) "inicio" else "login" }
+    val navBackStackEntry by navController.currentBackStackEntryAsState()
+    val rutaActual = navBackStackEntry?.destination?.route
 
-    NavHost(navController = navController, startDestination = pantallaInicial) {
+    val destinos = listOf(
+        Destino.Explorar,
+        Destino.Empresas,
+        Destino.MisCursos,
+        Destino.Admin,
+        Destino.Perfil
+    )
 
-        composable("login") {
-            PantallaLogin(
-                authViewModel = authViewModel,
-                irARegistro = {
-                    authViewModel.limpiarError()
-                    navController.navigate("registro")
-                },
-                alEntrar = {
-                    navController.navigate("inicio") {
-                        popUpTo("login") { inclusive = true } // para que "atrás" no vuelva al login
+    // Ocultar bottom bar en pantallas de detalle
+    val mostrarBottomBar = rutaActual in destinos.map { it.ruta }
+
+    Scaffold(
+        bottomBar = {
+            if (mostrarBottomBar) {
+                NavigationBar(
+                    containerColor = Color.White,
+                    tonalElevation = 8.dp
+                ) {
+                    destinos.forEach { destino ->
+                        NavigationBarItem(
+                            icon = { Icon(destino.icono, contentDescription = destino.titulo) },
+                            label = { Text(destino.titulo, fontSize = 10.sp) },
+                            selected = rutaActual == destino.ruta,
+                            onClick = {
+                                navController.navigate(destino.ruta) {
+                                    popUpTo(navController.graph.findStartDestination().id) {
+                                        saveState = true
+                                    }
+                                    launchSingleTop = true
+                                    restoreState = true
+                                }
+                            },
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = Color(0xFF6656E8),
+                                selectedTextColor = Color(0xFF6656E8),
+                                indicatorColor = Color(0xFFEEECFF)
+                            )
+                        )
                     }
                 }
-            )
+            }
         }
+    ) { innerPadding ->
+        NavHost(
+            navController = navController,
+            startDestination = "explorar",
+            modifier = Modifier.padding(innerPadding)
+        ) {
+            // Pantallas principales (bottom bar)
+            composable("explorar") {
+                PantallaExplorar(
+                    viewModel = nexoraViewModel,
+                    abrirEmpresa = { id -> navController.navigate("empresa/$id") },
+                    abrirCurso = { id -> navController.navigate("curso/$id") }
+                )
+            }
 
-        composable("registro") {
-            PantallaRegistro(
-                authViewModel = authViewModel,
-                volver = {
-                    authViewModel.limpiarError()
-                    navController.popBackStack()
-                },
-                alEntrar = {
-                    navController.navigate("inicio") {
-                        popUpTo("login") { inclusive = true }
-                    }
-                }
-            )
-        }
+            composable("empresas") {
+                PantallaEmpresas(
+                    viewModel = nexoraViewModel,
+                    abrirEmpresa = { id -> navController.navigate("empresa/$id") }
+                )
+            }
 
-        composable("inicio") {
-            PantallaInicio(
-                videoViewModel = videoViewModel,
-                abrirVideo = { id -> navController.navigate("reproductor/$id") },
-                irASubir = { navController.navigate("subir") },
-                irAPerfil = { navController.navigate("perfil") }
-            )
-        }
+            composable("mis_cursos") {
+                PantallaMisCursos(
+                    viewModel = nexoraViewModel,
+                    abrirCurso = { id -> navController.navigate("curso/$id") }
+                )
+            }
 
-        composable("subir") {
-            PantallaSubir(
-                videoViewModel = videoViewModel,
-                authViewModel = authViewModel,
-                volver = { navController.popBackStack() }
-            )
-        }
+            composable("admin") {
+                PantallaAdmin(viewModel = nexoraViewModel)
+            }
 
-        composable("reproductor/{videoId}") { pantalla ->
-            val videoId = pantalla.arguments?.getString("videoId")?.toIntOrNull() ?: 0
-            PantallaReproductor(
-                videoViewModel = videoViewModel,
-                authViewModel = authViewModel,
-                videoId = videoId,
-                volver = { navController.popBackStack() }
-            )
-        }
+            composable("perfil") {
+                PantallaPerfil(
+                    viewModel = authViewModel,
+                    onLogout = {}
+                )
+            }
 
-        composable("perfil") {
-            PantallaPerfil(
-                authViewModel = authViewModel,
-                videoViewModel = videoViewModel,
-                volver = { navController.popBackStack() },
-                alCerrarSesion = {
-                    authViewModel.cerrarSesion()
-                    navController.navigate("login") {
-                        popUpTo(navController.graph.id) { inclusive = true } // borra todo el historial
-                    }
-                }
-            )
+            // Pantallas de detalle (sin bottom bar)
+            composable(
+                "empresa/{empresaId}",
+                arguments = listOf(navArgument("empresaId") { type = NavType.StringType })
+            ) { backStackEntry ->
+                val empresaId = backStackEntry.arguments?.getString("empresaId") ?: ""
+                PantallaEmpresa(
+                    empresaId = empresaId,
+                    viewModel = nexoraViewModel,
+                    abrirCurso = { id -> navController.navigate("curso/$id") },
+                    volver = { navController.popBackStack() }
+                )
+            }
+
+            composable(
+                "curso/{cursoId}",
+                arguments = listOf(navArgument("cursoId") { type = NavType.IntType })
+            ) { backStackEntry ->
+                val cursoId = backStackEntry.arguments?.getInt("cursoId") ?: 0
+                PantallaCurso(
+                    cursoId = cursoId,
+                    viewModel = nexoraViewModel,
+                    volver = { navController.popBackStack() }
+                )
+            }
+
+            // Pantallas heredadas del proyecto original de vídeos
+            composable("subir") {
+                PantallaSubir(viewModel = videoViewModel)
+            }
+
+            composable(
+                "reproductor/{videoId}",
+                arguments = listOf(navArgument("videoId") { type = NavType.IntType })
+            ) { backStackEntry ->
+                val videoId = backStackEntry.arguments?.getInt("videoId") ?: 0
+                PantallaReproductor(videoId = videoId, viewModel = videoViewModel)
+            }
         }
     }
 }

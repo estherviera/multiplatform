@@ -1,91 +1,126 @@
 package com.example.nexora.data
 
 import android.content.Context
-import android.net.Uri
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.withContext
 import java.io.File
-import java.io.IOException
+import java.io.InputStream
 import java.security.MessageDigest
 
-// Repositorio: es el único sitio por el que los ViewModels acceden a los datos.
-// Así las pantallas no saben si los datos vienen de Room, de DataStore o de archivos.
+/**
+ * Repositorio: punto de acceso único a todos los datos.
+ * Patrón Facade: oculta Room, DataStore y archivos a los ViewModels.
+ */
 class NexoraRepository(context: Context) {
 
-    private val appContext = context.applicationContext
-    private val baseDeDatos = NexoraDatabase.obtenerBaseDeDatos(appContext)
-    private val usuarioDao = baseDeDatos.usuarioDao()
-    private val videoDao = baseDeDatos.videoDao()
-    private val sesion = SesionManager(appContext)
+    private val db = NexoraDatabase.getInstance(context).also { registrarInstancia(it) }
+    private val usuarioDao = db.usuarioDao()
+    private val videoDao = db.videoDao()
+    private val empresaDao = db.empresaDao()
+    private val cursoDao = db.cursoDao()
+    private val leccionDao = db.leccionDao()
+    private val recursoDao = db.recursoDao()
+    private val publicacionDao = db.publicacionDao()
+    val sesion = SesionManager(context)
+    private val carpetaVideos = File(context.filesDir, "videos").also { it.mkdirs() }
 
-    // ---------- Usuarios y sesión ----------
-
-    // Devuelve el usuario creado, o null si ese email ya estaba registrado
-    suspend fun registrar(nombre: String, email: String, password: String): Usuario? {
-        if (usuarioDao.buscarPorEmail(email) != null) return null
-        usuarioDao.insertar(Usuario(nombre = nombre, email = email, passwordHash = calcularHash(password)))
-        sesion.guardarSesion(email)
-        return usuarioDao.buscarPorEmail(email)
+    // ── Usuarios ──
+    suspend fun registrar(nombre: String, email: String, password: String): Boolean {
+        if (usuarioDao.buscarPorEmail(email) != null) return false
+        val hash = sha256(password)
+        usuarioDao.insertar(Usuario(nombre = nombre, email = email, passwordHash = hash))
+        sesion.guardar(email)
+        return true
     }
 
-    // Devuelve el usuario si el email y la contraseña son correctos, o null si no
-    suspend fun login(email: String, password: String): Usuario? {
-        val usuario = usuarioDao.buscarPorEmail(email) ?: return null
-        if (usuario.passwordHash != calcularHash(password)) return null
-        sesion.guardarSesion(email)
-        return usuario
+    suspend fun login(email: String, password: String): Boolean {
+        val user = usuarioDao.buscarPorEmail(email) ?: return false
+        if (user.passwordHash != sha256(password)) return false
+        sesion.guardar(email)
+        return true
     }
 
-    // Si había una sesión guardada, devuelve ese usuario
-    suspend fun usuarioConSesion(): Usuario? {
-        val email = sesion.obtenerEmail() ?: return null
-        return usuarioDao.buscarPorEmail(email)
-    }
+    suspend fun obtenerUsuario(email: String): Usuario? = usuarioDao.buscarPorEmail(email)
 
-    suspend fun cerrarSesion() {
-        sesion.cerrarSesion()
-    }
+    // ── Vídeos ──
+    fun todosLosVideos(): Flow<List<Video>> = videoDao.todos()
 
-    // ---------- Vídeos ----------
-
-    fun obtenerVideos(): Flow<List<Video>> = videoDao.obtenerTodos()
-
-    suspend fun subirVideo(uri: Uri, titulo: String, descripcion: String, autor: Usuario) {
-        // Copiar un archivo es una operación de E/S, así que la hacemos en Dispatchers.IO
-        val ruta = withContext(Dispatchers.IO) {
-            val carpeta = File(appContext.filesDir, "videos")
-            carpeta.mkdirs()
-            val archivo = File(carpeta, "video_${System.currentTimeMillis()}.mp4")
-            val entrada = appContext.contentResolver.openInputStream(uri)
-                ?: throw IOException("No se ha podido abrir el vídeo")
-            entrada.use { origen ->
-                archivo.outputStream().use { destino -> origen.copyTo(destino) }
-            }
-            archivo.absolutePath
-        }
-
-        val video = Video(
-            titulo = titulo,
-            descripcion = descripcion,
-            rutaArchivo = ruta,
-            autorEmail = autor.email,
-            autorNombre = autor.nombre,
-            fecha = System.currentTimeMillis()
+    suspend fun subirVideo(titulo: String, descripcion: String, stream: InputStream, email: String, nombre: String): Boolean {
+        val archivo = File(carpetaVideos, "${System.currentTimeMillis()}.mp4")
+        archivo.outputStream().use { stream.copyTo(it) }
+        videoDao.insertar(
+            Video(
+                titulo = titulo,
+                descripcion = descripcion,
+                rutaArchivo = archivo.absolutePath,
+                autorEmail = email,
+                autorNombre = nombre,
+                fecha = System.currentTimeMillis()
+            )
         )
-        videoDao.insertar(video)
+        return true
     }
+
+    suspend fun obtenerVideo(id: Int): Video? = videoDao.porId(id)
 
     suspend fun borrarVideo(video: Video) {
-        withContext(Dispatchers.IO) {
-            File(video.rutaArchivo).delete()
-        }
+        File(video.rutaArchivo).delete()
         videoDao.borrar(video)
     }
 
-    // Convierte la contraseña en un hash SHA-256 para no guardarla en texto plano
-    private fun calcularHash(password: String): String {
-        val bytes = MessageDigest.getInstance("SHA-256").digest(password.toByteArray())
-        return bytes.joinToString("") { "%02x".format(it) }
+    // ── Empresas ──
+    fun todasLasEmpresas(): Flow<List<Empresa>> = empresaDao.todas()
+    suspend fun obtenerEmpresa(id: String): Empresa? = empresaDao.porId(id)
+
+    // ── Cursos ──
+    fun todosLosCursos(): Flow<List<Curso>> = cursoDao.todos()
+    fun cursosPorEmpresa(empresaId: String): Flow<List<Curso>> = cursoDao.porEmpresa(empresaId)
+    fun cursosEnProgreso(): Flow<List<Curso>> = cursoDao.enProgreso()
+    suspend fun obtenerCurso(id: Int): Curso? = cursoDao.porId(id)
+
+    suspend fun crearCurso(empresaId: String, titulo: String, descripcion: String): Long {
+        return cursoDao.insertarUno(
+            Curso(
+                empresaId = empresaId,
+                titulo = titulo,
+                descripcion = descripcion,
+                emoji = "📚",
+                gradiente = obtenerEmpresa(empresaId)?.colorGradiente ?: "6656E8,8B7FFF"
+            )
+        )
     }
+
+    // ── Lecciones ──
+    fun leccionesPorCurso(cursoId: Int): Flow<List<Leccion>> = leccionDao.porCurso(cursoId)
+
+    suspend fun completarLeccion(leccionId: Int, cursoId: Int) {
+        leccionDao.completar(leccionId)
+        // Actualizar el progreso del curso
+        val total = leccionDao.totalPorCurso(cursoId)
+        val completadas = leccionDao.completadasPorCurso(cursoId)
+        val progreso = if (total > 0) (completadas * 100) / total else 0
+        cursoDao.actualizarProgreso(cursoId, progreso)
+    }
+
+    // ── Recursos ──
+    fun recursosPorEmpresa(empresaId: String): Flow<List<Recurso>> = recursoDao.porEmpresa(empresaId)
+
+    suspend fun crearRecurso(empresaId: String, titulo: String, tipo: String, tamano: String) {
+        recursoDao.insertarUno(
+            Recurso(empresaId = empresaId, titulo = titulo, tipo = tipo, tamano = tamano)
+        )
+    }
+
+    // ── Publicaciones ──
+    fun publicacionesPorEmpresa(empresaId: String): Flow<List<Publicacion>> = publicacionDao.porEmpresa(empresaId)
+
+    suspend fun crearPublicacion(empresaId: String, autor: String, titulo: String, texto: String) {
+        publicacionDao.insertarUna(
+            Publicacion(empresaId = empresaId, autor = autor, titulo = titulo, texto = texto)
+        )
+    }
+
+    private fun sha256(input: String): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(input.toByteArray())
+            .joinToString("") { "%02x".format(it) }
 }
