@@ -24,3 +24,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "Nexora"
 include(":app")
+project(":app").projectDir = file("frontend/android")

@@ -1,4 +1,20 @@
-# Nexora: app Android de vídeos
+# Nexora
+
+## Estructura del repositorio
+
+- `frontend/android/` contiene la app Android en Kotlin y Jetpack Compose. Gradle la sigue identificando como el módulo `:app`.
+- `backend/` contiene la API Kotlin/JVM y su base de datos SQLite local. Tiene su propia configuración de Gradle y una [guía de arranque y pruebas](backend/README.md).
+- `gradle/` y los archivos de Gradle de la raíz configuran el proyecto Android y proporcionan el wrapper que también usa el backend.
+
+Abre la raíz del repositorio en Android Studio. Desde esa raíz, ejecuta en PowerShell:
+
+```powershell
+.\gradlew.bat :app:testDebugUnitTest
+.\gradlew.bat -p backend test
+.\gradlew.bat -p backend run
+```
+
+## App Android
 
 App nativa en **Kotlin + Jetpack Compose** con:
 - Registro, inicio de sesión y cierre de sesión

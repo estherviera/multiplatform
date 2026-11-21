@@ -1,29 +1,32 @@
 # Backend de Nexora
 
-Servicio HTTP independiente de la app Android que está en `app/`. Requiere Node.js 20 o superior y usa la biblioteca estándar de Node.
-
-## Arranque local
-
-Desde la raíz del repositorio:
+Servicio local en Kotlin/JVM con SQLite. Requiere JDK 17 o superior. Desde la raíz del repositorio:
 
 ```powershell
-cd backend
-npm start
+.\gradlew.bat -p backend test
+.\gradlew.bat -p backend run
 ```
 
-| Ruta | Respuesta inicial |
-| --- | --- |
-| `GET http://127.0.0.1:3000/health` | `{"status":"ok"}` |
-| `GET http://127.0.0.1:3000/api/communities` | `{"items":[]}` |
+El servicio escucha en `http://127.0.0.1:3000`. Puedes cambiar el puerto con `PORT` y la ruta de SQLite con `DATABASE_PATH`. Por defecto, Gradle ejecuta el servicio desde `backend/` y la base se guarda en `backend/data/nexora.db`.
 
-El servidor escucha en la interfaz local. La variable de entorno `PORT` permite cambiar el puerto.
+| Método | Ruta | Resultado |
+| --- | --- | --- |
+| GET | `/health` | Estado del servidor |
+| GET | `/api/communities` | Comunidades guardadas |
+| POST | `/api/communities` | Crea una comunidad con un cuerpo JSON como `{"name":"Nexora"}` |
+| GET | `/api/communities/{id}` | Consulta una comunidad por su UUID |
+| PUT | `/api/communities/{id}` | Cambia el nombre con el mismo formato JSON |
+| DELETE | `/api/communities/{id}` | Elimina la comunidad y devuelve `204` |
+
+Las rutas individuales devuelven `400` si el UUID es inválido y `404` si no existe la comunidad.
+
+La API todavía no autentica a los usuarios y está pensada para desarrollo local.
 
 ## Arquitectura hexagonal
 
-- `src/domain/` contiene la entidad `Community`.
-- `src/application/` contiene el caso de uso para listar comunidades y el contrato `CommunityRepository`.
-- `src/adapters/in/` traduce solicitudes HTTP a llamadas a los casos de uso.
-- `src/adapters/out/` implementa el contrato con un repositorio en memoria. Arranca vacío.
-- `src/main.js` conecta los adaptadores con el caso de uso y arranca el servicio.
-
-Un adaptador de base de datos podrá implementar el mismo contrato para listar las comunidades guardadas.
+- `domain` contiene la entidad `Community` y sus invariantes.
+- `application` define los puertos de entrada para crear y listar, el contrato de persistencia y el servicio de comunidades.
+- `adapter/http` recibe solicitudes y llama a los puertos de entrada.
+- `adapter/persistence` implementa el contrato del repositorio usando SQLite.
+- `bootstrap/Main.kt` configura y conecta los componentes.
+- 	est/ contiene las pruebas de integración.

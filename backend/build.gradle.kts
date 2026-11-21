@@ -19,6 +19,16 @@ java {
 }
 
 kotlin {
+    sourceSets {
+        main {
+            kotlin.setSrcDirs(listOf("adapter", "application", "bootstrap", "domain"))
+        }
+        test {
+            kotlin.setSrcDirs(listOf("test"))
+        }
+    }
+
+
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
