@@ -77,7 +77,7 @@ Por defecto escucha en `http://127.0.0.1:8080`. Variables de entorno soportadas:
 | `NEXORA_DB_PREPARE_THRESHOLD` | *(por defecto del driver)* | Opcional (`0..100`); útil con valor `0` para poolers en modo transacción |
 | `NEXORA_DB_IO_PARALLELISM` | `maxPoolSize` | Paralelismo acotado del dispatcher de E/S bloqueante (`1..64`) |
 
-### Endpoints implementados (Fase 1 + Fase 2C.1)
+### Endpoints implementados (Fase 1 + Fases 2C.1 y 2C.2)
 
 | Método | Ruta | Autenticación | Resultado |
 | --- | --- | --- | --- |
@@ -90,6 +90,16 @@ Por defecto escucha en `http://127.0.0.1:8080`. Variables de entorno soportadas:
 | GET | `/api/v1/companies/{companyId}` | `Authorization: Bearer <jwt>` | Detalle de empresa activa (`200`), `400` si `companyId` no es UUID o `404` uniforme si no existe, está suspendida o es ajena |
 | GET | `/api/v1/companies/{companyId}/membership` | `Authorization: Bearer <jwt>` | Membresía activa propia en esa empresa (`200`) o `404` uniforme |
 | GET | `/api/v1/companies/{companyId}/memberships` | `Authorization: Bearer <jwt>` | Listado paginado de membresías visibles según RLS (`company_admin` ve todas las de su empresa; `trainer`/`member` solo su propia fila activa; `404` uniforme para empresas ajenas/suspendidas o sin membresía activa) |
+| POST | `/api/v1/companies/{companyId}/invitations` | `Authorization: Bearer <jwt>` (`company_admin`) | Crea invitación idempotente para un usuario elegible con perfil verificado (`201`/`200`, `403`, `404`, `409`) con auditoría |
+| GET | `/api/v1/companies/{companyId}/invitations` | `Authorization: Bearer <jwt>` (`company_admin`) | Listado paginado de invitaciones de la empresa |
+| GET | `/api/v1/me/invitations` | `Authorization: Bearer <jwt>` | Listado paginado de invitaciones dirigidas al usuario autenticado |
+| GET | `/api/v1/me/invitations/{invitationId}` | `Authorization: Bearer <jwt>` (destinatario) | Consulta de invitación propia (`200`) o `404` si es ajena |
+| POST | `/api/v1/me/invitations/{invitationId}/accept` | `Authorization: Bearer <jwt>` (destinatario) | Aceptación atómica e idempotente mediante `nexora.accept_company_invitation(...)` (`200`, `404`, `409`) con auditoría |
+| POST | `/api/v1/me/invitations/{invitationId}/decline` | `Authorization: Bearer <jwt>` (destinatario) | Rechazo explícito e idempotente (`200`, `404`, `409`) con auditoría |
+| PATCH | `/api/v1/companies/{companyId}/memberships/{userId}/role` | `Authorization: Bearer <jwt>` (`company_admin`) | Cambio de rol auditado; bloquea dejar la empresa sin administrador activo (`409 last_active_admin_required`) |
+| POST | `/api/v1/companies/{companyId}/memberships/{userId}/suspend` | `Authorization: Bearer <jwt>` (`company_admin`) | Suspensión auditada; protege al último administrador activo (`409`) |
+| POST | `/api/v1/companies/{companyId}/memberships/{userId}/reactivate` | `Authorization: Bearer <jwt>` (`company_admin`) | Reactivación auditada de membresía suspendida (no salta aceptación de invitaciones) |
+| POST | `/api/v1/companies/{companyId}/admins/replace` | `Authorization: Bearer <jwt>` (`company_admin`) | Sustitución atómica y auditada de un administrador activo por un sucesor activo |
 
 Todas las respuestas incluyen la cabecera `X-Request-Id`. Los errores HTTP devuelven un sobre JSON uniforme sin trazas, contraseñas, tokens ni detalles internos:
 
@@ -166,5 +176,8 @@ try {
 - `V1__init_identity_context.sql` (Fase 1C): función `nexora.current_user_id()` (`SECURITY INVOKER`, sin tablas de negocio).
 - `V2__create_multitenant_core_tables.sql` (Fase 2A): tablas iniciales multiempresa `nexora.profiles`, `nexora.companies` y `nexora.company_memberships` con FKs `ON DELETE RESTRICT`, restricciones, índices, trigger diferido de continuidad de administrador activo y RLS habilitado con denegación por defecto.
 - `V3__multitenant_rls_policies_and_grants.sql` (Fase 2B): funciones auxiliares booleanas de alcance mínimo (`nexora.is_active_company_member(uuid)`, `nexora.is_active_company_admin(uuid)`), corrección `SECURITY DEFINER` del trigger `nexora.enforce_company_has_active_admin()` para funcionar bajo RLS real, privilegios mínimos por tabla/columna para `app_runtime`, políticas RLS explícitas (`USING`/`WITH CHECK`) y revocación explícita para `PUBLIC`, `anon` y `authenticated`.
+- `V4__company_invitations_and_audit.sql` (Fase 2C.2): tablas `nexora.company_invitations` y `nexora.audit_events` con RLS, funciones acotadas `nexora.profile_exists(uuid)`, `nexora.record_audit_event(...)` y `nexora.accept_company_invitation(...)`, sin `INSERT`/`UPDATE`/`DELETE` directos sobre auditoría para `app_runtime`.
+- `V5__harden_audit_and_invitation_guards.sql` (Fase 2C.2 · endurecimiento): revoca `EXECUTE` sobre `nexora.record_audit_event(...)` a `app_runtime` para impedir falsificación directa de auditoría, mueve la auditoría de invitaciones/membresías a triggers `SECURITY DEFINER`, añade guarda `BEFORE UPDATE` de inmutabilidad/transiciones en `company_invitations` y función atómica `nexora.replace_company_admin(...)`.
+- `V6__defer_membership_audit_trigger.sql` (Fase 2C.2 · endurecimiento): convierte el trigger de auditoría de `company_memberships` en `CONSTRAINT TRIGGER ... DEFERRABLE INITIALLY DEFERRED` (`trg_z_company_memberships_audit`) para evitar deadlocks (`40P01`) con el bloqueo diferido `FOR UPDATE` del trigger de último administrador activo bajo concurrencia.
 
-**Pendiente de incrementos posteriores:** mutaciones administrativas de empresas y membresías, invitaciones, alta global de plataforma con MFA `aal2` y auditoría durable (`2C.2+`), verificación de auditoría `T19` y configuración de despliegue remoto/CI.
+**Pendiente de incrementos posteriores:** alta global de empresas mediante ejecutor de plataforma con MFA `aal2` y vigencia de sesión (`2C.3`), auditoría integral de cierre de Fase 2 (`2D`) y configuración de despliegue remoto/CI.

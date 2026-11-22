@@ -3,11 +3,13 @@ package com.nexora.backend.bootstrap
 import com.nexora.backend.adapter.http.ktor.nexoraSaasModule
 import com.nexora.backend.adapter.persistence.postgres.JdbcTransactionManager
 import com.nexora.backend.adapter.persistence.postgres.PostgresCompanyQueryRepository
+import com.nexora.backend.adapter.persistence.postgres.PostgresMembershipManagementRepository
 import com.nexora.backend.adapter.persistence.postgres.PostgresProfileRepository
 import com.nexora.backend.adapter.persistence.postgres.PostgresRuntimePool
 import com.nexora.backend.application.health.HealthService
 import com.nexora.backend.application.health.ReadinessCheck
 import com.nexora.backend.application.multitenant.CompanyQueryService
+import com.nexora.backend.application.multitenant.MembershipManagementService
 import com.nexora.backend.application.multitenant.ProfileService
 import io.ktor.server.application.ApplicationStopped
 import io.ktor.server.engine.embeddedServer
@@ -26,11 +28,18 @@ fun main() {
     val readinessChecks = linkedMapOf<String, ReadinessCheck>()
     var profileService: ProfileService? = null
     var companyQueryService: CompanyQueryService? = null
+    var membershipManagementService: MembershipManagementService? = null
     if (runtimePool != null) {
         val transactionManager = JdbcTransactionManager(runtimePool)
+        val companyQueryRepo = PostgresCompanyQueryRepository()
         readinessChecks["database"] = runtimePool.readinessCheck(transactionManager)
         profileService = ProfileService(transactionManager, PostgresProfileRepository())
-        companyQueryService = CompanyQueryService(transactionManager, PostgresCompanyQueryRepository())
+        companyQueryService = CompanyQueryService(transactionManager, companyQueryRepo)
+        membershipManagementService = MembershipManagementService(
+            transactionManager = transactionManager,
+            companyQueryRepository = companyQueryRepo,
+            managementRepository = PostgresMembershipManagementRepository(),
+        )
     }
 
     val healthService = HealthService(
@@ -55,6 +64,7 @@ fun main() {
             healthService = healthService,
             profileService = profileService,
             companyQueryService = companyQueryService,
+            membershipManagementService = membershipManagementService,
         )
     }
 

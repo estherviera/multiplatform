@@ -1,10 +1,13 @@
 package com.nexora.backend.adapter.http.ktor
 
 import com.fasterxml.jackson.core.JsonProcessingException
+import com.nexora.backend.application.multitenant.DomainConflictException
 import com.nexora.backend.application.multitenant.DomainValidationException
+import com.nexora.backend.application.multitenant.ForbiddenOperationException
 import com.nexora.backend.application.multitenant.ProfileIdentityConflictException
 import com.nexora.backend.application.multitenant.ResourceNotFoundException
 import com.nexora.backend.application.persistence.MissingIdentityContextException
+import org.postgresql.util.PSQLException
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
 import io.ktor.server.application.install
@@ -119,6 +122,66 @@ fun Application.configureErrorHandling() {
                     ),
                 ),
             )
+        }
+
+        exception<ForbiddenOperationException> { call, cause ->
+            call.respond(
+                HttpStatusCode.Forbidden,
+                ApiErrorResponse(
+                    error = ErrorDetail(
+                        code = cause.code,
+                        message = cause.message,
+                        requestId = call.callId,
+                    ),
+                ),
+            )
+        }
+
+        exception<DomainConflictException> { call, cause ->
+            call.respond(
+                HttpStatusCode.Conflict,
+                ApiErrorResponse(
+                    error = ErrorDetail(
+                        code = cause.code,
+                        message = cause.message,
+                        requestId = call.callId,
+                    ),
+                ),
+            )
+        }
+
+        exception<PSQLException> { call, cause ->
+            val serverMessage = cause.serverErrorMessage?.message
+            if (cause.sqlState == "23514" && serverMessage?.contains("active company_admin", ignoreCase = true) == true) {
+                call.respond(
+                    HttpStatusCode.Conflict,
+                    ApiErrorResponse(
+                        error = ErrorDetail(
+                            code = "last_active_admin_required",
+                            message = "Active company must retain at least one active administrator",
+                            requestId = call.callId,
+                        ),
+                    ),
+                )
+            } else {
+                errorLogger.error(
+                    "Unhandled database error [requestId={}, method={}, path={}, sqlState={}]",
+                    call.callId,
+                    call.request.httpMethod.value,
+                    call.request.path(),
+                    cause.sqlState,
+                )
+                call.respond(
+                    HttpStatusCode.InternalServerError,
+                    ApiErrorResponse(
+                        error = ErrorDetail(
+                            code = "internal_error",
+                            message = "Internal server error",
+                            requestId = call.callId,
+                        ),
+                    ),
+                )
+            }
         }
 
         exception<ProfileIdentityConflictException> { call, cause ->

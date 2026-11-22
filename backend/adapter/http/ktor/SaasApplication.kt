@@ -12,6 +12,7 @@ import com.nexora.backend.application.auth.AccessTokenVerifier
 import com.nexora.backend.application.auth.TokenVerificationResult
 import com.nexora.backend.application.health.HealthService
 import com.nexora.backend.application.multitenant.CompanyQueryService
+import com.nexora.backend.application.multitenant.MembershipManagementService
 import com.nexora.backend.application.multitenant.ProfileService
 import com.nexora.backend.bootstrap.AppConfig
 import io.ktor.http.HttpHeaders
@@ -39,6 +40,7 @@ fun Application.nexoraSaasModule(
     accessTokenVerifier: AccessTokenVerifier = defaultAccessTokenVerifier(config),
     profileService: ProfileService? = null,
     companyQueryService: CompanyQueryService? = null,
+    membershipManagementService: MembershipManagementService? = null,
     additionalRoutes: Route.() -> Unit = {},
 ) {
     install(CallId) {
@@ -90,6 +92,7 @@ fun Application.nexoraSaasModule(
         registerHealthRoutes(healthService, config.readinessToken)
         registerIdentityRoutes()
         registerMultitenantRoutes(profileService, companyQueryService)
+        registerMembershipManagementRoutes(membershipManagementService)
         additionalRoutes()
     }
 }

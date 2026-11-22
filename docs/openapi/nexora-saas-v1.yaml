@@ -1,13 +1,14 @@
 openapi: 3.0.3
 info:
   title: Nexora SaaS API
-  version: 0.3.0-alpha
+  version: 0.4.0-alpha
   description: >
-    Contrato OpenAPI del backend Ktor SaaS de Nexora (Fase 1 + Fase 2C.1).
+    Contrato OpenAPI del backend Ktor SaaS de Nexora (Fase 1 + Fases 2C.1 y 2C.2).
     Incluye salud operativa, autenticación JWT asimétrica mediante Supabase Auth/JWKS,
-    gestión idempotente del propio perfil y consultas multiempresa protegidas por RLS.
-    La creación global de empresas, invitaciones, cambios de roles y módulos educativos
-    se añadirán en incrementos posteriores.
+    gestión idempotente del propio perfil, consultas multiempresa y gestión segura de
+    invitaciones, roles, suspensiones y sustitución atómica de administradores protegida
+    por RLS y auditoría durable.
+    La creación global de empresas (2C.3) y los módulos educativos se añadirán posteriormente.
 servers:
   - url: http://127.0.0.1:8080
     description: Entorno local de desarrollo Ktor SaaS
@@ -20,6 +21,10 @@ tags:
     description: Consulta y gestión idempotente del perfil propio del usuario autenticado
   - name: Companies
     description: Consultas multiempresa y membresías visibles según RLS
+  - name: Invitations
+    description: Invitaciones empresariales y aceptación/rechazo por su destinatario
+  - name: MembershipAdmin
+    description: Gestión administrativa de roles, suspensiones y sustitución atómica de administradores
 paths:
   /health/live:
     get:
@@ -287,6 +292,364 @@ paths:
           $ref: '#/components/responses/NotFoundError'
         '503':
           $ref: '#/components/responses/ServiceUnavailableError'
+  /api/v1/companies/{companyId}/invitations:
+    post:
+      tags:
+        - Invitations
+      summary: Crea una invitación idempotente para un usuario elegible
+      operationId: createCompanyInvitation
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CompanyIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateInvitationRequest'
+      responses:
+        '201':
+          description: Invitación creada
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Cache-Control:
+              $ref: '#/components/headers/NoStoreCacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvitationResponse'
+        '200':
+          description: Reintento idempotente sobre invitación pendiente idéntica
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Cache-Control:
+              $ref: '#/components/headers/NoStoreCacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvitationResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailableError'
+    get:
+      tags:
+        - Invitations
+      summary: Lista paginada de invitaciones de la empresa (solo company_admin activo)
+      operationId: listCompanyInvitations
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CompanyIdPath'
+        - $ref: '#/components/parameters/PageLimit'
+        - $ref: '#/components/parameters/PageOffset'
+      responses:
+        '200':
+          description: Invitaciones de la empresa
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Cache-Control:
+              $ref: '#/components/headers/NoStoreCacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PagedInvitationResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailableError'
+  /api/v1/me/invitations:
+    get:
+      tags:
+        - Invitations
+      summary: Lista paginada de invitaciones dirigidas al usuario autenticado
+      operationId: listMyInvitations
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PageLimit'
+        - $ref: '#/components/parameters/PageOffset'
+      responses:
+        '200':
+          description: Invitaciones del usuario autenticado
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Cache-Control:
+              $ref: '#/components/headers/NoStoreCacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PagedInvitationResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailableError'
+  /api/v1/me/invitations/{invitationId}:
+    get:
+      tags:
+        - Invitations
+      summary: Consulta una invitación dirigida al usuario autenticado
+      operationId: getMyInvitation
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/InvitationIdPath'
+      responses:
+        '200':
+          description: Detalle de la invitación
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Cache-Control:
+              $ref: '#/components/headers/NoStoreCacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvitationResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailableError'
+  /api/v1/me/invitations/{invitationId}/accept:
+    post:
+      tags:
+        - Invitations
+      summary: Acepta de forma atómica e idempotente una invitación pendiente
+      operationId: acceptMyInvitation
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/InvitationIdPath'
+      responses:
+        '200':
+          description: Membresía activada
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Cache-Control:
+              $ref: '#/components/headers/NoStoreCacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MembershipResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailableError'
+  /api/v1/me/invitations/{invitationId}/decline:
+    post:
+      tags:
+        - Invitations
+      summary: Rechaza de forma explícita e idempotente una invitación pendiente
+      operationId: declineMyInvitation
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/InvitationIdPath'
+      responses:
+        '200':
+          description: Invitación rechazada
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Cache-Control:
+              $ref: '#/components/headers/NoStoreCacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvitationResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailableError'
+  /api/v1/companies/{companyId}/memberships/{userId}/role:
+    patch:
+      tags:
+        - MembershipAdmin
+      summary: Cambia el rol de una membresía existente (solo company_admin activo)
+      operationId: changeCompanyMemberRole
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CompanyIdPath'
+        - $ref: '#/components/parameters/UserIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangeRoleRequest'
+      responses:
+        '200':
+          description: Rol actualizado
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Cache-Control:
+              $ref: '#/components/headers/NoStoreCacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MembershipResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailableError'
+  /api/v1/companies/{companyId}/memberships/{userId}/suspend:
+    post:
+      tags:
+        - MembershipAdmin
+      summary: Suspende una membresía activa (impide dejar la empresa sin administrador activo)
+      operationId: suspendCompanyMember
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CompanyIdPath'
+        - $ref: '#/components/parameters/UserIdPath'
+      responses:
+        '200':
+          description: Membresía suspendida
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Cache-Control:
+              $ref: '#/components/headers/NoStoreCacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MembershipResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailableError'
+  /api/v1/companies/{companyId}/memberships/{userId}/reactivate:
+    post:
+      tags:
+        - MembershipAdmin
+      summary: Reactiva una membresía suspendida
+      operationId: reactivateCompanyMember
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CompanyIdPath'
+        - $ref: '#/components/parameters/UserIdPath'
+      responses:
+        '200':
+          description: Membresía reactivada
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Cache-Control:
+              $ref: '#/components/headers/NoStoreCacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MembershipResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailableError'
+  /api/v1/companies/{companyId}/admins/replace:
+    post:
+      tags:
+        - MembershipAdmin
+      summary: Sustituye atómicamente a un administrador activo promoviendo a un sucesor activo
+      operationId: replaceCompanyAdmin
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CompanyIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReplaceAdminRequest'
+      responses:
+        '200':
+          description: Administrador sustituido atómicamente
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Cache-Control:
+              $ref: '#/components/headers/NoStoreCacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReplaceAdminResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailableError'
 components:
   securitySchemes:
     BearerAuth:
@@ -305,6 +668,22 @@ components:
       in: path
       required: true
       description: UUID canónico de la empresa.
+      schema:
+        type: string
+        format: uuid
+    UserIdPath:
+      name: userId
+      in: path
+      required: true
+      description: UUID canónico del usuario objetivo.
+      schema:
+        type: string
+        format: uuid
+    InvitationIdPath:
+      name: invitationId
+      in: path
+      required: true
+      description: UUID canónico de la invitación.
       schema:
         type: string
         format: uuid
@@ -351,6 +730,24 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
     UnauthorizedError:
       description: Autenticación ausente, inválida o expirada
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ForbiddenError:
+      description: El actor autenticado carece del rol requerido en este ámbito
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ConflictError:
+      description: Conflicto de estado o regla de negocio (p.ej. último administrador activo)
       headers:
         X-Request-Id:
           $ref: '#/components/headers/XRequestId'
@@ -622,6 +1019,131 @@ components:
           type: integer
         hasMore:
           type: boolean
+    CreateInvitationRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - inviteeUserId
+        - role
+      properties:
+        inviteeUserId:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum:
+            - company_admin
+            - trainer
+            - member
+    ChangeRoleRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - role
+      properties:
+        role:
+          type: string
+          enum:
+            - company_admin
+            - trainer
+            - member
+    ReplaceAdminRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - outgoingAdminUserId
+        - successorUserId
+      properties:
+        outgoingAdminUserId:
+          type: string
+          format: uuid
+        successorUserId:
+          type: string
+          format: uuid
+        outgoingNewRole:
+          type: string
+          enum:
+            - trainer
+            - member
+          default: member
+    InvitationResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - companyId
+        - inviteeUserId
+        - role
+        - status
+        - expiresAt
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        companyId:
+          type: string
+          format: uuid
+        inviteeUserId:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum:
+            - company_admin
+            - trainer
+            - member
+        status:
+          type: string
+          enum:
+            - pending
+            - accepted
+            - declined
+            - revoked
+        expiresAt:
+          type: string
+          format: date-time
+        respondedAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    PagedInvitationResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - limit
+        - offset
+        - hasMore
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/InvitationResponse'
+        limit:
+          type: integer
+        offset:
+          type: integer
+        hasMore:
+          type: boolean
+    ReplaceAdminResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - outgoingMembership
+        - successorMembership
+      properties:
+        outgoingMembership:
+          $ref: '#/components/schemas/MembershipResponse'
+        successorMembership:
+          $ref: '#/components/schemas/MembershipResponse'
     FieldError:
       type: object
       additionalProperties: false

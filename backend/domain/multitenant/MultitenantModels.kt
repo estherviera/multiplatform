@@ -71,6 +71,37 @@ data class UserCompanySummary(
     val joinedAt: Instant,
 )
 
+enum class InvitationStatus(val wireValue: String) {
+    PENDING("pending"),
+    ACCEPTED("accepted"),
+    DECLINED("declined"),
+    REVOKED("revoked");
+
+    companion object {
+        fun fromDb(raw: String): InvitationStatus =
+            entries.firstOrNull { it.wireValue == raw }
+                ?: throw IllegalStateException("Unexpected invitation status '$raw'")
+    }
+}
+
+data class CompanyInvitation(
+    val id: UUID,
+    val companyId: UUID,
+    val inviteeUserId: UUID,
+    val invitedByUserId: UUID,
+    val role: CompanyRole,
+    val status: InvitationStatus,
+    val expiresAt: Instant,
+    val respondedAt: Instant?,
+    val createdAt: Instant,
+    val updatedAt: Instant,
+)
+
+data class ReplaceAdminResult(
+    val outgoingMembership: CompanyMembership,
+    val successorMembership: CompanyMembership,
+)
+
 data class PageRequest(
     val limit: Int = DEFAULT_LIMIT,
     val offset: Int = DEFAULT_OFFSET,

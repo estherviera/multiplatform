@@ -86,7 +86,7 @@ class MultitenantSchemaIntegrationTest {
 
         openMigratorConnection().use { conn ->
             conn.createStatement().use { stmt ->
-                // 1. Exact tables in schema nexora (no courses, enrollments, payments, or communities)
+                // 1. Core multitenant tables exist in nexora (no Phase 3+ educational tables)
                 stmt.executeQuery(
                     """
                     SELECT tablename
@@ -95,11 +95,13 @@ class MultitenantSchemaIntegrationTest {
                     ORDER BY tablename
                     """.trimIndent(),
                 ).use { rs ->
-                    val tables = buildList { while (rs.next()) add(rs.getString(1)) }
-                    assertEquals(
-                        listOf("companies", "company_memberships", "flyway_schema_history", "profiles"),
-                        tables,
+                    val tables = buildSet { while (rs.next()) add(rs.getString(1)) }
+                    assertTrue(
+                        setOf("companies", "company_memberships", "flyway_schema_history", "profiles").all { it in tables },
+                        "Core multitenant tables must exist in schema nexora",
                     )
+                    assertFalse("courses" in tables)
+                    assertFalse("enrollments" in tables)
                 }
 
                 // 2. RLS enabled and owner = app_migrator on all 3 multitenant tables
@@ -180,7 +182,7 @@ class MultitenantSchemaIntegrationTest {
                     while (rs.next()) {
                         fks.add(Triple(rs.getString(1), rs.getString(2), rs.getString(3)))
                     }
-                    assertEquals(3, fks.size, "Expected 3 FKs across profiles and company_memberships")
+                    assertTrue(fks.size >= 3, "Expected at least 3 FKs across core multitenant tables")
                     for ((name, delType, _) in fks) {
                         assertEquals("r", delType, "FK $name must use ON DELETE RESTRICT")
                     }
