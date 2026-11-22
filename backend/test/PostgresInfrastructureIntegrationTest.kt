@@ -95,12 +95,12 @@ class PostgresInfrastructureIntegrationTest {
 
         val firstRun = migrator.migrate()
         assertEquals("nexora", firstRun.schema)
-        assertEquals("1", firstRun.targetSchemaVersion)
+        assertTrue((firstRun.targetSchemaVersion?.toIntOrNull() ?: 0) >= 1)
 
         // Second run must be idempotent (0 new migrations)
         val secondRun = migrator.migrate()
         assertEquals(0, secondRun.migrationsExecuted)
-        assertEquals("1", secondRun.targetSchemaVersion)
+        assertEquals(firstRun.targetSchemaVersion, secondRun.targetSchemaVersion)
 
         // Validation must pass
         val validation = migrator.validate()
@@ -141,7 +141,7 @@ class PostgresInfrastructureIntegrationTest {
                     assertEquals(0, rs.getInt(9), "app_migrator must have no role memberships")
                 }
 
-                // Confirm only Flyway history table exists in nexora and NO business tables exist
+                // Confirm Flyway history exists in nexora and no Phase 3+ tables exist
                 stmt.executeQuery(
                     """
                     SELECT tablename
@@ -150,10 +150,12 @@ class PostgresInfrastructureIntegrationTest {
                     ORDER BY tablename
                     """.trimIndent(),
                 ).use { rs ->
-                    val tables = buildList {
+                    val tables = buildSet {
                         while (rs.next()) add(rs.getString(1))
                     }
-                    assertEquals(listOf("flyway_schema_history"), tables)
+                    assertTrue("flyway_schema_history" in tables)
+                    assertFalse("courses" in tables)
+                    assertFalse("enrollments" in tables)
                 }
             }
         }

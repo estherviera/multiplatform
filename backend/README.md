@@ -156,4 +156,8 @@ try {
 }
 ```
 
-**Pendiente de incrementos posteriores:** tablas multiempresa (`profiles`, `companies`, `company_memberships`), políticas RLS reales y pruebas de aislamiento A/B entre empresas (`F2`), comprobación en servidor de vigencia de sesión/MFA para operaciones sensibles de plataforma y configuración de despliegue remoto/CI.
+**Migraciones aplicadas en el esquema `nexora`:**
+- `V1__init_identity_context.sql` (Fase 1C): función `nexora.current_user_id()` (`SECURITY INVOKER`, sin tablas de negocio).
+- `V2__create_multitenant_core_tables.sql` (Fase 2A): tablas iniciales multiempresa `nexora.profiles`, `nexora.companies` y `nexora.company_memberships` con FKs `ON DELETE RESTRICT`, restricciones, índices, trigger diferido de continuidad de administrador activo y RLS habilitado con denegación por defecto (sin grants a `app_runtime` ni políticas permisivas).
+
+**Pendiente de incrementos posteriores:** políticas RLS reales, grants granulares y pruebas de aislamiento A/B entre empresas (`2B`), rutas de gestión empresarial y alta de plataforma auditada (`2B`/`2C`), comprobación en servidor de vigencia de sesión/MFA y configuración de despliegue remoto/CI.
