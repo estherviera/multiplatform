@@ -23,7 +23,7 @@ if ($LASTEXITCODE) { throw 'Supabase local no está preparado.' }
 docker --context desktop-linux port supabase_db_nexora_prephase
 ```
 
-Desde la raíz, tras el primer arranque, convierte las publicaciones en enlaces explícitos a loopback. Usa GoTrue directamente y deja Kong detenido. La URL de Auth para este entorno es `http://127.0.0.1:55421`, con rutas nativas como `/health` y `/settings`. El gateway y su prefijo `/auth/v1` quedan fuera de esta variante local.
+Desde la raíz, tras el primer arranque, convierte las publicaciones en enlaces explícitos a loopback y asegura MFA TOTP habilitado en el contenedor local de GoTrue (`GOTRUE_MFA_TOTP_ENROLL_ENABLED=true`, `GOTRUE_MFA_TOTP_VERIFY_ENABLED=true`, reflejado también en `[auth.mfa.totp]` de `config.toml`). Usa GoTrue directamente y deja Kong detenido. La URL de Auth para este entorno es `http://127.0.0.1:55421`, con rutas nativas como `/health`, `/settings`, `/user` y `/factors`. El gateway y su prefijo `/auth/v1` quedan fuera de esta variante local.
 
 ```powershell
 docker --context desktop-linux stop supabase_kong_nexora_prephase supabase_db_nexora_prephase supabase_auth_nexora_prephase

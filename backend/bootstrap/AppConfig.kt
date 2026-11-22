@@ -1,8 +1,11 @@
 package com.nexora.backend.bootstrap
 
+import com.nexora.backend.adapter.auth.GlobalAdminAuthConfig
 import com.nexora.backend.adapter.auth.JwtAuthConfig
 import com.nexora.backend.adapter.persistence.postgres.DatabaseConfig
+import com.nexora.backend.application.auth.GlobalAdminPolicyConfig
 import java.net.URI
+import java.util.UUID
 
 enum class AppEnvironment(val wireName: String) {
     LOCAL("local"),
@@ -35,6 +38,7 @@ data class AppConfig(
     val shutdownTimeoutMs: Long,
     val auth: JwtAuthConfig? = null,
     val database: DatabaseConfig? = null,
+    val globalAdmin: GlobalAdminAuthConfig? = null,
 ) {
     init {
         require(host.isNotBlank()) { "NEXORA_HOST must not be blank" }
@@ -56,6 +60,15 @@ data class AppConfig(
         if (auth != null) {
             validateAuthTransport(auth, environment)
         }
+        if (globalAdmin != null) {
+            require(auth != null) {
+                "NEXORA_AUTH_ISSUER and NEXORA_AUTH_JWKS_URL are required when NEXORA_GLOBAL_ADMIN_SUB is configured"
+            }
+            require(globalAdmin.expectedIssuer == auth.issuer) {
+                "globalAdmin.expectedIssuer must match NEXORA_AUTH_ISSUER"
+            }
+            validateEndpointUri(globalAdmin.authUserUri, "NEXORA_GLOBAL_ADMIN_AUTH_USER_URL", environment)
+        }
         if (database != null && environment.isRestricted) {
             require(database.sslMode in DatabaseConfig.STRICT_SSL_MODES) {
                 "NEXORA_RUNTIME_SSL_MODE must be verify-ca or verify-full in ${environment.wireName} environment"
@@ -67,6 +80,7 @@ data class AppConfig(
         "AppConfig(environment=${environment.wireName}, host=$host, port=$port, serviceName=$serviceName, " +
             "corsAllowedOrigins=$corsAllowedOrigins, readinessTokenConfigured=${readinessToken != null}, " +
             "authConfigured=${auth != null}, databaseConfigured=${database != null}, " +
+            "globalAdminConfigured=${globalAdmin != null}, " +
             "shutdownGracePeriodMs=$shutdownGracePeriodMs, shutdownTimeoutMs=$shutdownTimeoutMs)"
 
     companion object {
@@ -88,6 +102,7 @@ data class AppConfig(
             val timeoutMs = parseLong(env["NEXORA_SHUTDOWN_TIMEOUT_MS"], DEFAULT_SHUTDOWN_TIMEOUT_MS, "NEXORA_SHUTDOWN_TIMEOUT_MS")
             val auth = parseAuthConfig(env, environment)
             val database = parseDatabaseConfig(env, environment)
+            val globalAdmin = parseGlobalAdminConfig(env, auth, environment)
 
             return AppConfig(
                 environment = environment,
@@ -100,6 +115,57 @@ data class AppConfig(
                 shutdownTimeoutMs = timeoutMs,
                 auth = auth,
                 database = database,
+                globalAdmin = globalAdmin,
+            )
+        }
+
+        private fun parseGlobalAdminConfig(
+            env: Map<String, String>,
+            auth: JwtAuthConfig?,
+            environment: AppEnvironment,
+        ): GlobalAdminAuthConfig? {
+            val rawSub = env["NEXORA_GLOBAL_ADMIN_SUB"]?.trim()?.takeIf { it.isNotEmpty() }
+                ?: return null
+
+            val adminUserId = try {
+                UUID.fromString(rawSub).takeIf { it.toString().equals(rawSub, ignoreCase = true) }
+            } catch (_: IllegalArgumentException) {
+                null
+            } ?: throw IllegalArgumentException("NEXORA_GLOBAL_ADMIN_SUB must be a single valid canonical UUID")
+
+            require(auth != null) {
+                "NEXORA_AUTH_ISSUER and NEXORA_AUTH_JWKS_URL must be configured when NEXORA_GLOBAL_ADMIN_SUB is set"
+            }
+
+            val mfaMaxAgeSeconds = parseLong(
+                env["NEXORA_GLOBAL_ADMIN_MFA_MAX_AGE_SECONDS"],
+                GlobalAdminPolicyConfig.DEFAULT_MFA_MAX_AGE.seconds,
+                "NEXORA_GLOBAL_ADMIN_MFA_MAX_AGE_SECONDS",
+            )
+            val authTimeoutMs = parseLong(
+                env["NEXORA_GLOBAL_ADMIN_AUTH_TIMEOUT_MS"],
+                GlobalAdminAuthConfig.DEFAULT_AUTH_TIMEOUT_MS,
+                "NEXORA_GLOBAL_ADMIN_AUTH_TIMEOUT_MS",
+            )
+            val authUserUrlRaw = env["NEXORA_GLOBAL_ADMIN_AUTH_USER_URL"]?.trim()?.takeIf { it.isNotEmpty() }
+                ?: "${auth.issuer.trimEnd('/')}/user"
+            val authUserUri = try {
+                URI(authUserUrlRaw)
+            } catch (_: Exception) {
+                throw IllegalArgumentException("Invalid NEXORA_GLOBAL_ADMIN_AUTH_USER_URL '$authUserUrlRaw'")
+            }
+            validateEndpointUri(authUserUri, "NEXORA_GLOBAL_ADMIN_AUTH_USER_URL", environment)
+
+            val apiKey = env["NEXORA_AUTH_API_KEY"]?.trim()?.takeIf { it.isNotEmpty() }
+
+            return GlobalAdminAuthConfig(
+                globalAdminUserId = adminUserId,
+                expectedIssuer = auth.issuer,
+                authUserUri = authUserUri,
+                mfaMaxAgeSeconds = mfaMaxAgeSeconds,
+                authTimeoutMs = authTimeoutMs,
+                clockSkewSeconds = auth.clockSkewSeconds,
+                apiKey = apiKey,
             )
         }
 

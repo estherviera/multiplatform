@@ -32,19 +32,36 @@ async function main() {
           HostConfig.PortBindings[port][0].HostPort !== hostPort))) {
       throw new Error(`Configuración inesperada para ${name}`);
     }
-    if (HostConfig.PortBindings?.[port]?.[0]?.HostIp === '127.0.0.1') continue;
+    const hasLoopback = HostConfig.PortBindings?.[port]?.[0]?.HostIp === '127.0.0.1';
+    const authMfaSettings = {
+      GOTRUE_MFA_TOTP_ENROLL_ENABLED: 'true',
+      GOTRUE_MFA_TOTP_VERIFY_ENABLED: 'true',
+    };
+    const hasAuthMfa = service !== 'auth' || Object.entries(authMfaSettings).every(
+      ([k, v]) => (Config.Env ?? []).includes(`${k}=${v}`),
+    );
+    if (hasLoopback && hasAuthMfa) continue;
     HostConfig.PortBindings = { [port]: [{ HostIp: '127.0.0.1', HostPort: hostPort }] };
     if (service === 'auth') {
       const externalUrl = `http://127.0.0.1:${hostPort}`;
       const settings = {
         API_EXTERNAL_URL: externalUrl,
         GOTRUE_JWT_ISSUER: externalUrl,
+        ...authMfaSettings,
       };
-      Config.Env = Config.Env.map((line) => {
+      const seen = new Set();
+      Config.Env = (Config.Env ?? []).map((line) => {
         const key = line.split('=', 1)[0];
         if (key.startsWith('GOTRUE_MAILER_URLPATHS_')) return line.replace('=/auth/v1/', '=/');
-        return Object.hasOwn(settings, key) ? `${key}=${settings[key]}` : line;
+        if (Object.hasOwn(settings, key)) {
+          seen.add(key);
+          return `${key}=${settings[key]}`;
+        }
+        return line;
       });
+      for (const [k, v] of Object.entries(settings)) {
+        if (!seen.has(k)) Config.Env.push(`${k}=${v}`);
+      }
     }
     const backupName = `${name}_sin_loopback`;
     await request('POST', `/containers/${Id}/rename?name=${backupName}`);

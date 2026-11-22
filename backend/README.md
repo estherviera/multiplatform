@@ -180,4 +180,18 @@ try {
 - `V5__harden_audit_and_invitation_guards.sql` (Fase 2C.2 · endurecimiento): revoca `EXECUTE` sobre `nexora.record_audit_event(...)` a `app_runtime` para impedir falsificación directa de auditoría, mueve la auditoría de invitaciones/membresías a triggers `SECURITY DEFINER`, añade guarda `BEFORE UPDATE` de inmutabilidad/transiciones en `company_invitations` y función atómica `nexora.replace_company_admin(...)`.
 - `V6__defer_membership_audit_trigger.sql` (Fase 2C.2 · endurecimiento): convierte el trigger de auditoría de `company_memberships` en `CONSTRAINT TRIGGER ... DEFERRABLE INITIALLY DEFERRED` (`trg_z_company_memberships_audit`) para evitar deadlocks (`40P01`) con el bloqueo diferido `FOR UPDATE` del trigger de último administrador activo bajo concurrencia.
 
-**Pendiente de incrementos posteriores:** alta global de empresas mediante ejecutor de plataforma con MFA `aal2` y vigencia de sesión (`2C.3`), auditoría integral de cierre de Fase 2 (`2D`) y configuración de despliegue remoto/CI.
+### Autorización del administrador global de plataforma (Fase 2C.3A)
+
+La autorización del administrador global está deshabilitada por defecto si no se configura `NEXORA_GLOBAL_ADMIN_SUB` y permanece completamente separada de los roles empresariales y de RLS. No introduce todavía endpoints HTTP ni creación de empresas (`2C.3B`).
+
+| Variable | Por defecto | Descripción |
+| --- | --- | --- |
+| `NEXORA_GLOBAL_ADMIN_SUB` | *(deshabilitada)* | UUID canónico único del administrador global de plataforma (rechaza listas o valores malformados) |
+| `NEXORA_GLOBAL_ADMIN_MFA_MAX_AGE_SECONDS` | `300` | Ventana máxima de frescura del desafío MFA (`30`–`900` s), evaluada sobre `amr[].timestamp` y nunca sobre `iat` |
+| `NEXORA_GLOBAL_ADMIN_AUTH_USER_URL` | `<NEXORA_AUTH_ISSUER>/user` | Endpoint de Supabase Auth para verificar sesión viva, estado de cuenta y factores MFA verificados (HTTPS obligatorio fuera de loopback) |
+| `NEXORA_GLOBAL_ADMIN_AUTH_TIMEOUT_MS` | `3000` | Timeout de conexión y petición HTTP hacia Supabase Auth (`500`–`15000` ms, `Redirect.NEVER`) |
+| `NEXORA_AUTH_API_KEY` | *(opcional)* | Clave pública/anon para gateway de Supabase alojado (rechaza explícitamente cualquier clave `service_role`) |
+
+**Verificación real en Supabase Auth local (`supabase_auth_nexora_prephase`, GoTrue v2.197.0 sobre `127.0.0.1:55421`):** el entorno local habilita MFA TOTP (`[auth.mfa.totp]` en `infra/local/supabase/config.toml` y `GOTRUE_MFA_TOTP_ENROLL_ENABLED=true` / `GOTRUE_MFA_TOTP_VERIFY_ENABLED=true` en `infra/local/Bind-LocalPorts.cjs`, conservando el enlace exclusivo a loopback). Se ha verificado de extremo a extremo contra GoTrue real: denegación de `aal1` (`MFA_REQUIRED`), inscripción/desafío/verificación TOTP con autorización positiva `aal2`, invariancia de `amr[totp].timestamp` al renovar con `refresh_token` mientras `iat` avanza, caducidad de la ventana de frescura MFA (`MFA_STEP_UP_EXPIRED`) y revocación inmediata tras `POST /logout` (`SESSION_REVOKED_OR_INVALID`).
+
+**Pendiente de incrementos posteriores:** ejecutor SQL acotado y endpoint de alta de empresas (`2C.3B`), auditoría integral de cierre de Fase 2 (`2D`) y configuración de despliegue remoto/CI.

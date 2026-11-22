@@ -4,6 +4,7 @@ import com.nexora.backend.application.auth.AccessTokenVerifier
 import com.nexora.backend.application.auth.TokenRejectionReason
 import com.nexora.backend.application.auth.TokenVerificationResult
 import com.nexora.backend.domain.auth.AuthenticatedPrincipal
+import com.nexora.backend.domain.auth.AuthenticationMethodReference
 import com.nimbusds.jose.JWSAlgorithm
 import com.nimbusds.jose.JWSVerifier
 import com.nimbusds.jose.crypto.ECDSAVerifier
@@ -19,6 +20,7 @@ import com.nimbusds.jwt.JWTParser
 import com.nimbusds.jwt.SignedJWT
 import java.text.ParseException
 import java.time.Clock
+import java.time.Instant
 import java.util.UUID
 
 class NimbusJwtAccessTokenVerifier(
@@ -182,6 +184,9 @@ class NimbusJwtAccessTokenVerifier(
             else -> return TokenVerificationResult.Invalid(TokenRejectionReason.DISALLOWED_TOKEN_CLASS)
         }
 
+        val amr = parseAmrClaim(claims.getClaim("amr"))
+            ?: return TokenVerificationResult.Invalid(TokenRejectionReason.DISALLOWED_TOKEN_CLASS)
+
         val issuedAt = claims.issueTime?.toInstant()
 
         return TokenVerificationResult.Valid(
@@ -191,10 +196,37 @@ class NimbusJwtAccessTokenVerifier(
                 audience = config.audience,
                 sessionId = sessionId,
                 aal = aal,
+                amr = amr,
                 issuedAt = issuedAt,
                 expiresAt = exp,
             ),
         )
+    }
+
+    private fun parseAmrClaim(rawAmr: Any?): List<AuthenticationMethodReference>? {
+        if (rawAmr == null) return emptyList()
+        val list = rawAmr as? List<*> ?: return null
+        if (list.size > MAX_AMR_ENTRIES) return null
+        return buildList(list.size) {
+            for (entry in list) {
+                val map = entry as? Map<*, *> ?: return null
+                val method = (map["method"] as? String)?.trim()?.takeIf { it.isNotEmpty() && it.length <= 64 }
+                    ?: return null
+                val tsNumber = map["timestamp"] as? Number ?: return null
+                val tsDouble = tsNumber.toDouble()
+                if (!tsDouble.isFinite() || tsDouble <= 0.0 || tsDouble > MAX_EPOCH_SECONDS.toDouble()) {
+                    return null
+                }
+                val tsLong = tsNumber.toLong()
+                if (tsLong <= 0L) return null
+                add(
+                    AuthenticationMethodReference(
+                        method = method,
+                        authenticatedAt = Instant.ofEpochSecond(tsLong),
+                    ),
+                )
+            }
+        }
     }
 
     private fun parseCanonicalUuid(raw: String?): UUID? {
@@ -209,5 +241,7 @@ class NimbusJwtAccessTokenVerifier(
     companion object {
         const val MAX_TOKEN_LENGTH = 8_192
         const val MIN_RSA_KEY_BITS = 2048
+        const val MAX_AMR_ENTRIES = 32
+        const val MAX_EPOCH_SECONDS = 4_102_444_800L // Year 2100 UTC
     }
 }
