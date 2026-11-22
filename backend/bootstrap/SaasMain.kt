@@ -2,9 +2,13 @@ package com.nexora.backend.bootstrap
 
 import com.nexora.backend.adapter.http.ktor.nexoraSaasModule
 import com.nexora.backend.adapter.persistence.postgres.JdbcTransactionManager
+import com.nexora.backend.adapter.persistence.postgres.PostgresCompanyQueryRepository
+import com.nexora.backend.adapter.persistence.postgres.PostgresProfileRepository
 import com.nexora.backend.adapter.persistence.postgres.PostgresRuntimePool
 import com.nexora.backend.application.health.HealthService
 import com.nexora.backend.application.health.ReadinessCheck
+import com.nexora.backend.application.multitenant.CompanyQueryService
+import com.nexora.backend.application.multitenant.ProfileService
 import io.ktor.server.application.ApplicationStopped
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
@@ -20,9 +24,13 @@ fun main() {
     }
 
     val readinessChecks = linkedMapOf<String, ReadinessCheck>()
+    var profileService: ProfileService? = null
+    var companyQueryService: CompanyQueryService? = null
     if (runtimePool != null) {
         val transactionManager = JdbcTransactionManager(runtimePool)
         readinessChecks["database"] = runtimePool.readinessCheck(transactionManager)
+        profileService = ProfileService(transactionManager, PostgresProfileRepository())
+        companyQueryService = CompanyQueryService(transactionManager, PostgresCompanyQueryRepository())
     }
 
     val healthService = HealthService(
@@ -42,7 +50,12 @@ fun main() {
                 runtimePool.close()
             }
         }
-        nexoraSaasModule(config, healthService)
+        nexoraSaasModule(
+            config = config,
+            healthService = healthService,
+            profileService = profileService,
+            companyQueryService = companyQueryService,
+        )
     }
 
     Runtime.getRuntime().addShutdownHook(

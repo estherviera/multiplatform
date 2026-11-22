@@ -11,6 +11,8 @@ import com.nexora.backend.adapter.auth.NimbusJwtAccessTokenVerifier
 import com.nexora.backend.application.auth.AccessTokenVerifier
 import com.nexora.backend.application.auth.TokenVerificationResult
 import com.nexora.backend.application.health.HealthService
+import com.nexora.backend.application.multitenant.CompanyQueryService
+import com.nexora.backend.application.multitenant.ProfileService
 import com.nexora.backend.bootstrap.AppConfig
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
@@ -35,6 +37,8 @@ fun Application.nexoraSaasModule(
     config: AppConfig,
     healthService: HealthService = HealthService(config.serviceName, config.environment.wireName),
     accessTokenVerifier: AccessTokenVerifier = defaultAccessTokenVerifier(config),
+    profileService: ProfileService? = null,
+    companyQueryService: CompanyQueryService? = null,
     additionalRoutes: Route.() -> Unit = {},
 ) {
     install(CallId) {
@@ -85,6 +89,7 @@ fun Application.nexoraSaasModule(
     routing {
         registerHealthRoutes(healthService, config.readinessToken)
         registerIdentityRoutes()
+        registerMultitenantRoutes(profileService, companyQueryService)
         additionalRoutes()
     }
 }

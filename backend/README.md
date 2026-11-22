@@ -77,13 +77,19 @@ Por defecto escucha en `http://127.0.0.1:8080`. Variables de entorno soportadas:
 | `NEXORA_DB_PREPARE_THRESHOLD` | *(por defecto del driver)* | Opcional (`0..100`); útil con valor `0` para poolers en modo transacción |
 | `NEXORA_DB_IO_PARALLELISM` | `maxPoolSize` | Paralelismo acotado del dispatcher de E/S bloqueante (`1..64`) |
 
-### Endpoints de los incrementos 1A, 1B y 1C
+### Endpoints implementados (Fase 1 + Fase 2C.1)
 
 | Método | Ruta | Autenticación | Resultado |
 | --- | --- | --- | --- |
 | GET | `/health/live` | Pública | Liveness pública mínima (`200`, `{"status":"ok"}`) |
 | GET | `/health/ready` | Token operativo opcional/obligatorio | Readiness operativa (`200` listo, `503` degradado, `401` si falta o falla `X-Nexora-Readiness-Token` cuando está configurado). Cuando PostgreSQL está habilitado, incluye el estado `checks.database` |
 | GET | `/api/v1/auth/me` | `Authorization: Bearer <jwt>` | Identidad verificada (`userId` UUID de `sub`, `issuer`, `audience`, `sessionId`, `aal`, `expiresAt`) con `Cache-Control: no-store`. Devuelve `401` ante token ausente/inválido/expirado y `503` con fallo cerrado si el verificador no está configurado o JWKS no responde |
+| GET | `/api/v1/me/profile` | `Authorization: Bearer <jwt>` | Perfil propio (`200`) o `404 profile_not_found` si todavía no existe (`Cache-Control: no-store`) |
+| PUT | `/api/v1/me/profile` | `Authorization: Bearer <jwt>` | Creación idempotente o actualización de `displayName` y `avatarPath` vinculados exclusivamente al `sub` del JWT (`200`, `400`, `409`, `503`) |
+| GET | `/api/v1/me/companies` | `Authorization: Bearer <jwt>` | Listado paginado (`limit` 1..100, `offset` 0..10000) de empresas activas donde el usuario es miembro activo junto a su rol |
+| GET | `/api/v1/companies/{companyId}` | `Authorization: Bearer <jwt>` | Detalle de empresa activa (`200`), `400` si `companyId` no es UUID o `404` uniforme si no existe, está suspendida o es ajena |
+| GET | `/api/v1/companies/{companyId}/membership` | `Authorization: Bearer <jwt>` | Membresía activa propia en esa empresa (`200`) o `404` uniforme |
+| GET | `/api/v1/companies/{companyId}/memberships` | `Authorization: Bearer <jwt>` | Listado paginado de membresías visibles según RLS (`company_admin` ve todas las de su empresa; `trainer`/`member` solo su propia fila activa; `404` uniforme para empresas ajenas/suspendidas o sin membresía activa) |
 
 Todas las respuestas incluyen la cabecera `X-Request-Id`. Los errores HTTP devuelven un sobre JSON uniforme sin trazas, contraseñas, tokens ni detalles internos:
 
@@ -161,4 +167,4 @@ try {
 - `V2__create_multitenant_core_tables.sql` (Fase 2A): tablas iniciales multiempresa `nexora.profiles`, `nexora.companies` y `nexora.company_memberships` con FKs `ON DELETE RESTRICT`, restricciones, índices, trigger diferido de continuidad de administrador activo y RLS habilitado con denegación por defecto.
 - `V3__multitenant_rls_policies_and_grants.sql` (Fase 2B): funciones auxiliares booleanas de alcance mínimo (`nexora.is_active_company_member(uuid)`, `nexora.is_active_company_admin(uuid)`), corrección `SECURITY DEFINER` del trigger `nexora.enforce_company_has_active_admin()` para funcionar bajo RLS real, privilegios mínimos por tabla/columna para `app_runtime`, políticas RLS explícitas (`USING`/`WITH CHECK`) y revocación explícita para `PUBLIC`, `anon` y `authenticated`.
 
-**Pendiente de incrementos posteriores:** gestión segura de empresas y membresías en API, alta global de plataforma con MFA `aal2` y auditoría durable (`2C`), pruebas de administración/auditoría `T19` y configuración de despliegue remoto/CI.
+**Pendiente de incrementos posteriores:** mutaciones administrativas de empresas y membresías, invitaciones, alta global de plataforma con MFA `aal2` y auditoría durable (`2C.2+`), verificación de auditoría `T19` y configuración de despliegue remoto/CI.

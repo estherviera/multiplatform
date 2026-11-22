@@ -1,13 +1,13 @@
 openapi: 3.0.3
 info:
   title: Nexora SaaS API
-  version: 0.2.0-alpha
+  version: 0.3.0-alpha
   description: >
-    Contrato OpenAPI de los incrementos 1A y 1B (Fase 1) del backend Ktor SaaS de Nexora.
-    Incluye endpoints de salud (liveness y readiness), formato estándar de errores HTTP
-    y autenticación JWT asimétrica mediante Supabase Auth/JWKS con la operación protegida mínima
-    `/api/v1/auth/me`.
-    El acceso a PostgreSQL/JDBC, Flyway, RLS y las tablas/rutas de negocio se añadirán en incrementos posteriores.
+    Contrato OpenAPI del backend Ktor SaaS de Nexora (Fase 1 + Fase 2C.1).
+    Incluye salud operativa, autenticación JWT asimétrica mediante Supabase Auth/JWKS,
+    gestión idempotente del propio perfil y consultas multiempresa protegidas por RLS.
+    La creación global de empresas, invitaciones, cambios de roles y módulos educativos
+    se añadirán en incrementos posteriores.
 servers:
   - url: http://127.0.0.1:8080
     description: Entorno local de desarrollo Ktor SaaS
@@ -16,13 +16,16 @@ tags:
     description: Comprobaciones operativas de liveness y readiness
   - name: Identity
     description: Verificación de identidad autenticada mediante JWT de Supabase Auth
+  - name: Profiles
+    description: Consulta y gestión idempotente del perfil propio del usuario autenticado
+  - name: Companies
+    description: Consultas multiempresa y membresías visibles según RLS
 paths:
   /health/live:
     get:
       tags:
         - Health
       summary: Comprobación pública mínima de liveness
-      description: Indica que el proceso HTTP de Ktor está activo y respondiendo solicitudes.
       operationId: getLiveness
       responses:
         '200':
@@ -34,17 +37,11 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/LivenessResponse'
-              example:
-                status: ok
   /health/ready:
     get:
       tags:
         - Health
       summary: Comprobación operativa de readiness
-      description: >
-        Evalúa si el servicio está listo para recibir tráfico.
-        Cuando `NEXORA_READINESS_TOKEN` está configurado (obligatorio en staging y production),
-        requiere la cabecera `X-Nexora-Readiness-Token`.
       operationId: getReadiness
       security:
         - {}
@@ -59,25 +56,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ReadinessResponse'
-              example:
-                status: ready
-                service: nexora-saas-api
-                environment: local
-                checks: {}
         '401':
-          description: Token operativo de readiness ausente o inválido
-          headers:
-            X-Request-Id:
-              $ref: '#/components/headers/XRequestId'
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-              example:
-                error:
-                  code: invalid_readiness_token
-                  message: Unauthorized readiness check
-                  requestId: 3d2f8e4a-8c5a-4d7c-9b2a-9e2e5c1a4f10
+          $ref: '#/components/responses/UnauthorizedError'
         '503':
           description: Servicio no listo (uno o más checks fallaron)
           headers:
@@ -87,22 +67,11 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ReadinessResponse'
-              example:
-                status: not_ready
-                service: nexora-saas-api
-                environment: local
-                checks:
-                  database: not_ready
   /api/v1/auth/me:
     get:
       tags:
         - Identity
       summary: Devuelve la identidad verificada del usuario autenticado
-      description: >
-        Ruta protegida mínima del incremento 1B. Verifica criptográficamente el access token JWT
-        de Supabase Auth contra las claves públicas JWKS del emisor configurado y construye un
-        principal inmutable a partir del claim `sub` (UUID). No devuelve ni confía en roles
-        empresariales ni metadatos enviados por el cliente.
       operationId: getAuthenticatedIdentity
       security:
         - BearerAuth: []
@@ -113,42 +82,75 @@ paths:
             X-Request-Id:
               $ref: '#/components/headers/XRequestId'
             Cache-Control:
-              description: Evita almacenamiento en caché de la respuesta de identidad.
-              schema:
-                type: string
-                enum:
-                  - no-store
+              $ref: '#/components/headers/NoStoreCacheControl'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/IdentityResponse'
-              example:
-                userId: 550e8400-e29b-41d4-a716-446655440000
-                issuer: http://127.0.0.1:55421
-                audience: authenticated
-                sessionId: 7d2f8e4a-8c5a-4d7c-9b2a-9e2e5c1a4f10
-                aal: aal1
-                expiresAt: '2026-11-22T20:00:00Z'
         '401':
-          description: Token ausente, malformado, expirado, con firma/emisor/audiencia inválidos o clase no permitida
-          headers:
-            X-Request-Id:
-              $ref: '#/components/headers/XRequestId'
-            WWW-Authenticate:
-              description: Desafío Bearer RFC 6750.
-              schema:
-                type: string
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-              example:
-                error:
-                  code: invalid_token
-                  message: Invalid access token
-                  requestId: 3d2f8e4a-8c5a-4d7c-9b2a-9e2e5c1a4f10
+          $ref: '#/components/responses/UnauthorizedError'
         '503':
-          description: Verificador JWT no configurado o JWKS temporalmente no disponible (fallo cerrado)
+          $ref: '#/components/responses/ServiceUnavailableError'
+  /api/v1/me/profile:
+    get:
+      tags:
+        - Profiles
+      summary: Consulta el perfil propio del usuario autenticado
+      operationId: getMyProfile
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Perfil del usuario autenticado
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Cache-Control:
+              $ref: '#/components/headers/NoStoreCacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailableError'
+    put:
+      tags:
+        - Profiles
+      summary: Crea de forma idempotente o actualiza el perfil propio
+      description: >
+        Vincula siempre el perfil al UUID `sub` verificado en el JWT.
+        Rechaza campos adicionales no permitidos y valida longitud y formato de los campos editables.
+      operationId: upsertMyProfile
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpsertProfileRequest'
+      responses:
+        '200':
+          description: Perfil creado o actualizado correctamente
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Cache-Control:
+              $ref: '#/components/headers/NoStoreCacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '409':
+          description: La identidad autenticada no es elegible para aprovisionar perfil
           headers:
             X-Request-Id:
               $ref: '#/components/headers/XRequestId'
@@ -156,11 +158,135 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-              example:
-                error:
-                  code: auth_verifier_unavailable
-                  message: Authentication verification temporarily unavailable
-                  requestId: 3d2f8e4a-8c5a-4d7c-9b2a-9e2e5c1a4f10
+        '503':
+          $ref: '#/components/responses/ServiceUnavailableError'
+  /api/v1/me/companies:
+    get:
+      tags:
+        - Companies
+      summary: Lista paginada de empresas activas donde el usuario es miembro activo
+      operationId: listMyCompanies
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PageLimit'
+        - $ref: '#/components/parameters/PageOffset'
+      responses:
+        '200':
+          description: Listado paginado de empresas activas del usuario con su rol
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Cache-Control:
+              $ref: '#/components/headers/NoStoreCacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PagedUserCompanyResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailableError'
+  /api/v1/companies/{companyId}:
+    get:
+      tags:
+        - Companies
+      summary: Consulta el detalle de una empresa activa a la que pertenece el usuario
+      description: Devuelve 404 uniforme si la empresa no existe, está suspendida o el usuario no es miembro activo.
+      operationId: getCompanyById
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CompanyIdPath'
+      responses:
+        '200':
+          description: Detalle de la empresa activa
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Cache-Control:
+              $ref: '#/components/headers/NoStoreCacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompanyResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailableError'
+  /api/v1/companies/{companyId}/membership:
+    get:
+      tags:
+        - Companies
+      summary: Consulta la membresía activa propia del usuario en una empresa
+      description: Devuelve 404 uniforme si la empresa no existe, está suspendida o el usuario no es miembro activo.
+      operationId: getMyCompanyMembership
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CompanyIdPath'
+      responses:
+        '200':
+          description: Membresía activa del usuario en la empresa
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Cache-Control:
+              $ref: '#/components/headers/NoStoreCacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MembershipResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailableError'
+  /api/v1/companies/{companyId}/memberships:
+    get:
+      tags:
+        - Companies
+      summary: Lista paginada de membresías visibles según RLS en una empresa activa
+      description: >
+        Un `company_admin` activo visualiza todas las membresías de su empresa (sin datos de `profiles`).
+        Un `trainer` o `member` activo visualiza únicamente su propia membresía activa conforme a RLS.
+        Devuelve 404 uniforme para empresas ajenas, inexistentes o suspendidas y usuarios sin membresía activa.
+      operationId: listCompanyMemberships
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CompanyIdPath'
+        - $ref: '#/components/parameters/PageLimit'
+        - $ref: '#/components/parameters/PageOffset'
+      responses:
+        '200':
+          description: Listado paginado de membresías visibles según el rol del usuario
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Cache-Control:
+              $ref: '#/components/headers/NoStoreCacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PagedMembershipResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailableError'
 components:
   securitySchemes:
     BearerAuth:
@@ -173,11 +299,83 @@ components:
       in: header
       name: X-Nexora-Readiness-Token
       description: Token operativo para proteger /health/ready en entornos restringidos.
+  parameters:
+    CompanyIdPath:
+      name: companyId
+      in: path
+      required: true
+      description: UUID canónico de la empresa.
+      schema:
+        type: string
+        format: uuid
+    PageLimit:
+      name: limit
+      in: query
+      required: false
+      description: Tamaño máximo de página (1..100).
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    PageOffset:
+      name: offset
+      in: query
+      required: false
+      description: Desplazamiento de paginación (0..10000).
+      schema:
+        type: integer
+        minimum: 0
+        maximum: 10000
+        default: 0
   headers:
     XRequestId:
       description: Identificador de correlación de la solicitud HTTP.
       schema:
         type: string
+    NoStoreCacheControl:
+      description: Impide el almacenamiento en caché de datos privados.
+      schema:
+        type: string
+        enum:
+          - no-store
+  responses:
+    BadRequestError:
+      description: Solicitud inválida o error de validación
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    UnauthorizedError:
+      description: Autenticación ausente, inválida o expirada
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFoundError:
+      description: Recurso no encontrado o no accesible
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ServiceUnavailableError:
+      description: Servicio temporalmente no disponible (fallo cerrado)
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
   schemas:
     LivenessResponse:
       type: object
@@ -231,7 +429,6 @@ components:
         userId:
           type: string
           format: uuid
-          description: Identificador canónico de usuario extraído del claim `sub` verificado.
         issuer:
           type: string
         audience:
@@ -246,6 +443,185 @@ components:
         expiresAt:
           type: string
           format: date-time
+    UpsertProfileRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - displayName
+      properties:
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 120
+        avatarPath:
+          type: string
+          minLength: 1
+          maxLength: 512
+          nullable: true
+    ProfileResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - displayName
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+        avatarPath:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    CompanyResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - slug
+        - name
+        - status
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        slug:
+          type: string
+        name:
+          type: string
+        status:
+          type: string
+          enum:
+            - active
+            - suspended
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    UserCompanyResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - slug
+        - name
+        - status
+        - role
+        - membershipStatus
+        - joinedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        slug:
+          type: string
+        name:
+          type: string
+        status:
+          type: string
+          enum:
+            - active
+            - suspended
+        role:
+          type: string
+          enum:
+            - company_admin
+            - trainer
+            - member
+        membershipStatus:
+          type: string
+          enum:
+            - invited
+            - active
+            - suspended
+        joinedAt:
+          type: string
+          format: date-time
+    MembershipResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - companyId
+        - userId
+        - role
+        - status
+        - createdAt
+        - updatedAt
+      properties:
+        companyId:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum:
+            - company_admin
+            - trainer
+            - member
+        status:
+          type: string
+          enum:
+            - invited
+            - active
+            - suspended
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    PagedUserCompanyResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - limit
+        - offset
+        - hasMore
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/UserCompanyResponse'
+        limit:
+          type: integer
+        offset:
+          type: integer
+        hasMore:
+          type: boolean
+    PagedMembershipResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - limit
+        - offset
+        - hasMore
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/MembershipResponse'
+        limit:
+          type: integer
+        offset:
+          type: integer
+        hasMore:
+          type: boolean
     FieldError:
       type: object
       additionalProperties: false

@@ -1,6 +1,9 @@
 package com.nexora.backend.adapter.http.ktor
 
 import com.fasterxml.jackson.core.JsonProcessingException
+import com.nexora.backend.application.multitenant.DomainValidationException
+import com.nexora.backend.application.multitenant.ProfileIdentityConflictException
+import com.nexora.backend.application.multitenant.ResourceNotFoundException
 import com.nexora.backend.application.persistence.MissingIdentityContextException
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
@@ -86,6 +89,46 @@ fun Application.configureErrorHandling() {
                         message = cause.message,
                         requestId = call.callId,
                         details = cause.details?.takeIf { it.isNotEmpty() },
+                    ),
+                ),
+            )
+        }
+
+        exception<DomainValidationException> { call, cause ->
+            call.respond(
+                HttpStatusCode.BadRequest,
+                ApiErrorResponse(
+                    error = ErrorDetail(
+                        code = "validation_failed",
+                        message = cause.message ?: "Validation failed",
+                        requestId = call.callId,
+                        details = cause.violations.map { FieldError(it.field, it.reason) },
+                    ),
+                ),
+            )
+        }
+
+        exception<ResourceNotFoundException> { call, cause ->
+            call.respond(
+                HttpStatusCode.NotFound,
+                ApiErrorResponse(
+                    error = ErrorDetail(
+                        code = cause.code,
+                        message = cause.message,
+                        requestId = call.callId,
+                    ),
+                ),
+            )
+        }
+
+        exception<ProfileIdentityConflictException> { call, cause ->
+            call.respond(
+                HttpStatusCode.Conflict,
+                ApiErrorResponse(
+                    error = ErrorDetail(
+                        code = "profile_identity_conflict",
+                        message = cause.message,
+                        requestId = call.callId,
                     ),
                 ),
             )
