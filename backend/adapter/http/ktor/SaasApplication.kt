@@ -8,12 +8,18 @@ import com.fasterxml.jackson.module.kotlin.KotlinModule
 import com.nexora.backend.adapter.auth.CachingJwksKeyProvider
 import com.nexora.backend.adapter.auth.HttpJwksFetcher
 import com.nexora.backend.adapter.auth.NimbusJwtAccessTokenVerifier
+import com.nexora.backend.adapter.auth.SupabaseAuthSessionVerifier
 import com.nexora.backend.application.auth.AccessTokenVerifier
+import com.nexora.backend.application.auth.DefaultGlobalAdminAuthorizer
+import com.nexora.backend.application.auth.GlobalAdminAuthorizer
+import com.nexora.backend.application.auth.GlobalAdminPolicyConfig
 import com.nexora.backend.application.auth.TokenVerificationResult
 import com.nexora.backend.application.health.HealthService
 import com.nexora.backend.application.multitenant.CompanyQueryService
 import com.nexora.backend.application.multitenant.MembershipManagementService
 import com.nexora.backend.application.multitenant.ProfileService
+import com.nexora.backend.application.platform.PlatformCompanyService
+import com.nexora.backend.application.platform.PlatformRateLimiter
 import com.nexora.backend.bootstrap.AppConfig
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
@@ -41,6 +47,13 @@ fun Application.nexoraSaasModule(
     profileService: ProfileService? = null,
     companyQueryService: CompanyQueryService? = null,
     membershipManagementService: MembershipManagementService? = null,
+    globalAdminAuthorizer: GlobalAdminAuthorizer = defaultGlobalAdminAuthorizer(config, accessTokenVerifier),
+    platformCompanyService: PlatformCompanyService? = null,
+    platformRateLimiter: PlatformRateLimiter = PlatformRateLimiter(
+        maxRequestsPerCaller = config.platformRateLimitMaxRequests,
+        maxGlobalRequests = maxOf(config.platformRateLimitMaxRequests * 3, PlatformRateLimiter.DEFAULT_MAX_GLOBAL_REQUESTS),
+        window = Duration.ofSeconds(config.platformRateLimitWindowSeconds),
+    ),
     additionalRoutes: Route.() -> Unit = {},
 ) {
     install(CallId) {
@@ -76,7 +89,9 @@ fun Application.nexoraSaasModule(
             allowHeader(HttpHeaders.Authorization)
             allowHeader(HttpHeaders.ContentType)
             allowHeader(HttpHeaders.XRequestId)
+            allowHeader("Idempotency-Key")
             exposeHeader(HttpHeaders.XRequestId)
+            exposeHeader("X-Idempotency-Replayed")
             config.corsAllowedOrigins.forEach { origin ->
                 val uri = URI(origin)
                 val hostWithPort = if (uri.port != -1) "${uri.host}:${uri.port}" else uri.host
@@ -93,8 +108,31 @@ fun Application.nexoraSaasModule(
         registerIdentityRoutes()
         registerMultitenantRoutes(profileService, companyQueryService)
         registerMembershipManagementRoutes(membershipManagementService)
+        registerPlatformCompanyRoutes(globalAdminAuthorizer, platformCompanyService, platformRateLimiter)
         additionalRoutes()
     }
+}
+
+private fun defaultGlobalAdminAuthorizer(
+    config: AppConfig,
+    accessTokenVerifier: AccessTokenVerifier,
+): GlobalAdminAuthorizer {
+    val globalAdminConfig = config.globalAdmin
+        ?: return DefaultGlobalAdminAuthorizer(
+            config = GlobalAdminPolicyConfig.disabled(),
+            accessTokenVerifier = accessTokenVerifier,
+            sessionVerifier = null,
+        )
+    val sessionVerifier = SupabaseAuthSessionVerifier(
+        userEndpointUri = globalAdminConfig.authUserUri,
+        timeout = Duration.ofMillis(globalAdminConfig.authTimeoutMs),
+        apiKey = globalAdminConfig.apiKey,
+    )
+    return DefaultGlobalAdminAuthorizer(
+        config = globalAdminConfig.toPolicyConfig(),
+        accessTokenVerifier = accessTokenVerifier,
+        sessionVerifier = sessionVerifier,
+    )
 }
 
 private fun defaultAccessTokenVerifier(config: AppConfig): AccessTokenVerifier {

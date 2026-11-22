@@ -60,6 +60,7 @@ Inyectar dos contraseñas aleatorias distintas de al menos 32 caracteres desde e
 | `NEXORA_MIGRATION_PASSWORD` | Entrada del verificador local, inyectada desde el mismo secreto usado como FLYWAY_PASSWORD en el migrador. |
 | `NEXORA_AUTH_ISSUER`, `NEXORA_AUTH_AUDIENCE`, `NEXORA_AUTH_JWKS_URL` | Configuración futura del verificador. Contrastar emisor, audiencia, JWKS y algoritmo con Auth de desarrollo antes de configurar Ktor. HTTP de loopback solo en pruebas locales. |
 | `NEXORA_GLOBAL_ADMIN_SUB` | Solo el componente protegido de plataforma. Un UUID verificado, ausente mientras la capacidad esté deshabilitada. |
+| `NEXORA_PLATFORM_JDBC_URL`, `NEXORA_PLATFORM_USER`, `NEXORA_PLATFORM_PASSWORD` | Ejecutor SQL dedicado de plataforma (`app_platform`), con contraseña propia en `%LOCALAPPDATA%\Nexora\prephase-platform.dpapi`. Solo posee `USAGE` en `nexora_platform` y `EXECUTE` sobre las funciones fijas de V7; cero acceso directo a tablas ni al esquema `nexora`. |
 
 ```powershell
 & ./infra/local/Test-LocalRoles.ps1 -SetInitialPasswords

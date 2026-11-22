@@ -13,10 +13,17 @@ if ($LASTEXITCODE -ne 0 -or $endpoint -ne 'npipe:////./pipe/dockerDesktopLinuxEn
 }
 $runtimePassword = $env:NEXORA_RUNTIME_PASSWORD
 $migrationPassword = $env:NEXORA_MIGRATION_PASSWORD
+$platformPassword = $env:NEXORA_PLATFORM_PASSWORD
 if (!$runtimePassword -or !$migrationPassword -or $runtimePassword -ceq $migrationPassword) {
     throw 'Inyecta dos contraseñas locales distintas.'
 }
 $passwords = [ordered]@{ app_runtime = $runtimePassword; app_migrator = $migrationPassword }
+if ($platformPassword) {
+    if ($platformPassword -ceq $runtimePassword -or $platformPassword -ceq $migrationPassword) {
+        throw 'La contraseña de app_platform debe ser distinta de app_runtime y app_migrator.'
+    }
+    $passwords['app_platform'] = $platformPassword
+}
 $verifySql = Get-Content -Raw -Encoding UTF8 (Join-Path $PSScriptRoot 'verify-roles.sql')
 foreach ($role in $passwords.Keys) {
     $password = $passwords[$role]

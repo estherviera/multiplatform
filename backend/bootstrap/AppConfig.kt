@@ -3,7 +3,9 @@ package com.nexora.backend.bootstrap
 import com.nexora.backend.adapter.auth.GlobalAdminAuthConfig
 import com.nexora.backend.adapter.auth.JwtAuthConfig
 import com.nexora.backend.adapter.persistence.postgres.DatabaseConfig
+import com.nexora.backend.adapter.persistence.postgres.PlatformDatabaseConfig
 import com.nexora.backend.application.auth.GlobalAdminPolicyConfig
+import com.nexora.backend.application.platform.PlatformRateLimiter
 import java.net.URI
 import java.util.UUID
 
@@ -39,6 +41,9 @@ data class AppConfig(
     val auth: JwtAuthConfig? = null,
     val database: DatabaseConfig? = null,
     val globalAdmin: GlobalAdminAuthConfig? = null,
+    val platformDatabase: PlatformDatabaseConfig? = null,
+    val platformRateLimitMaxRequests: Int = PlatformRateLimiter.DEFAULT_MAX_REQUESTS_PER_CALLER,
+    val platformRateLimitWindowSeconds: Long = PlatformRateLimiter.DEFAULT_WINDOW.seconds,
 ) {
     init {
         require(host.isNotBlank()) { "NEXORA_HOST must not be blank" }
@@ -47,6 +52,12 @@ data class AppConfig(
         require(shutdownGracePeriodMs >= 0) { "NEXORA_SHUTDOWN_GRACE_MS must be >= 0" }
         require(shutdownTimeoutMs >= shutdownGracePeriodMs) {
             "NEXORA_SHUTDOWN_TIMEOUT_MS must be >= NEXORA_SHUTDOWN_GRACE_MS"
+        }
+        require(platformRateLimitMaxRequests in 1..1_000) {
+            "NEXORA_PLATFORM_RATE_LIMIT_MAX_REQUESTS must be between 1 and 1000"
+        }
+        require(platformRateLimitWindowSeconds in 1..3_600) {
+            "NEXORA_PLATFORM_RATE_LIMIT_WINDOW_SECONDS must be between 1 and 3600"
         }
         corsAllowedOrigins.forEach { validateOrigin(it) }
         if (environment.isRestricted) {
@@ -74,13 +85,18 @@ data class AppConfig(
                 "NEXORA_RUNTIME_SSL_MODE must be verify-ca or verify-full in ${environment.wireName} environment"
             }
         }
+        if (platformDatabase != null && environment.isRestricted) {
+            require(platformDatabase.sslMode in DatabaseConfig.STRICT_SSL_MODES) {
+                "NEXORA_PLATFORM_SSL_MODE must be verify-ca or verify-full in ${environment.wireName} environment"
+            }
+        }
     }
 
     override fun toString(): String =
         "AppConfig(environment=${environment.wireName}, host=$host, port=$port, serviceName=$serviceName, " +
             "corsAllowedOrigins=$corsAllowedOrigins, readinessTokenConfigured=${readinessToken != null}, " +
             "authConfigured=${auth != null}, databaseConfigured=${database != null}, " +
-            "globalAdminConfigured=${globalAdmin != null}, " +
+            "globalAdminConfigured=${globalAdmin != null}, platformDatabaseConfigured=${platformDatabase != null}, " +
             "shutdownGracePeriodMs=$shutdownGracePeriodMs, shutdownTimeoutMs=$shutdownTimeoutMs)"
 
     companion object {
@@ -103,6 +119,17 @@ data class AppConfig(
             val auth = parseAuthConfig(env, environment)
             val database = parseDatabaseConfig(env, environment)
             val globalAdmin = parseGlobalAdminConfig(env, auth, environment)
+            val platformDatabase = parsePlatformDatabaseConfig(env, environment)
+            val platformRateLimitMaxRequests = parseInt(
+                env["NEXORA_PLATFORM_RATE_LIMIT_MAX_REQUESTS"],
+                PlatformRateLimiter.DEFAULT_MAX_REQUESTS_PER_CALLER,
+                "NEXORA_PLATFORM_RATE_LIMIT_MAX_REQUESTS",
+            )
+            val platformRateLimitWindowSeconds = parseLong(
+                env["NEXORA_PLATFORM_RATE_LIMIT_WINDOW_SECONDS"],
+                PlatformRateLimiter.DEFAULT_WINDOW.seconds,
+                "NEXORA_PLATFORM_RATE_LIMIT_WINDOW_SECONDS",
+            )
 
             return AppConfig(
                 environment = environment,
@@ -116,6 +143,50 @@ data class AppConfig(
                 auth = auth,
                 database = database,
                 globalAdmin = globalAdmin,
+                platformDatabase = platformDatabase,
+                platformRateLimitMaxRequests = platformRateLimitMaxRequests,
+                platformRateLimitWindowSeconds = platformRateLimitWindowSeconds,
+            )
+        }
+
+        private fun parsePlatformDatabaseConfig(
+            env: Map<String, String>,
+            environment: AppEnvironment,
+        ): PlatformDatabaseConfig? {
+            val jdbcUrl = env["NEXORA_PLATFORM_JDBC_URL"]?.trim()?.takeIf { it.isNotEmpty() }
+            val username = env["NEXORA_PLATFORM_USER"]?.trim()?.takeIf { it.isNotEmpty() }
+            val password = env["NEXORA_PLATFORM_PASSWORD"]?.takeIf { it.isNotEmpty() }
+
+            if (jdbcUrl == null && username == null && password == null) {
+                return null
+            }
+
+            require(jdbcUrl != null) { "NEXORA_PLATFORM_JDBC_URL is required when platform executor is configured" }
+            require(username != null) { "NEXORA_PLATFORM_USER is required when platform executor is configured" }
+            require(password != null) { "NEXORA_PLATFORM_PASSWORD is required when platform executor is configured" }
+
+            val schema = env["NEXORA_PLATFORM_SCHEMA"]?.trim()?.takeIf { it.isNotEmpty() }
+                ?: PlatformDatabaseConfig.DEFAULT_SCHEMA
+            val defaultSsl = if (environment.isRestricted) {
+                DatabaseConfig.DEFAULT_RESTRICTED_SSL_MODE
+            } else {
+                DatabaseConfig.DEFAULT_LOCAL_SSL_MODE
+            }
+            val sslMode = env["NEXORA_PLATFORM_SSL_MODE"]?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
+                ?: defaultSsl
+            val maxPoolSize = parseInt(
+                env["NEXORA_PLATFORM_DB_MAX_POOL_SIZE"],
+                PlatformDatabaseConfig.DEFAULT_MAX_POOL_SIZE,
+                "NEXORA_PLATFORM_DB_MAX_POOL_SIZE",
+            )
+
+            return PlatformDatabaseConfig(
+                jdbcUrl = jdbcUrl,
+                username = username,
+                password = password,
+                schema = schema,
+                sslMode = sslMode,
+                maxPoolSize = maxPoolSize,
             )
         }
 

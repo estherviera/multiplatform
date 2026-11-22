@@ -1,14 +1,15 @@
 openapi: 3.0.3
 info:
   title: Nexora SaaS API
-  version: 0.4.0-alpha
+  version: 0.5.0-alpha
   description: >
-    Contrato OpenAPI del backend Ktor SaaS de Nexora (Fase 1 + Fases 2C.1 y 2C.2).
+    Contrato OpenAPI del backend Ktor SaaS de Nexora (Fase 1 + Fases 2C.1, 2C.2, 2C.3A y 2C.3B).
     Incluye salud operativa, autenticación JWT asimétrica mediante Supabase Auth/JWKS,
-    gestión idempotente del propio perfil, consultas multiempresa y gestión segura de
+    gestión idempotente del propio perfil, consultas multiempresa, gestión segura de
     invitaciones, roles, suspensiones y sustitución atómica de administradores protegida
-    por RLS y auditoría durable.
-    La creación global de empresas (2C.3) y los módulos educativos se añadirán posteriormente.
+    por RLS y auditoría durable, y creación atómica e idempotente de empresas por el
+    administrador global verificado mediante MFA `aal2` reciente y ejecutor SQL dedicado `app_platform`.
+    Los módulos educativos se añadirán posteriormente.
 servers:
   - url: http://127.0.0.1:8080
     description: Entorno local de desarrollo Ktor SaaS
@@ -25,6 +26,8 @@ tags:
     description: Invitaciones empresariales y aceptación/rechazo por su destinatario
   - name: MembershipAdmin
     description: Gestión administrativa de roles, suspensiones y sustitución atómica de administradores
+  - name: PlatformAdmin
+    description: Operaciones de plataforma restringidas al administrador global verificado con MFA reciente y ejecutor SQL dedicado
 paths:
   /health/live:
     get:
@@ -650,6 +653,65 @@ paths:
           $ref: '#/components/responses/ConflictError'
         '503':
           $ref: '#/components/responses/ServiceUnavailableError'
+  /api/v1/platform/companies:
+    post:
+      tags:
+        - PlatformAdmin
+      summary: Crea una empresa activa y asigna atómicamente su primer company_admin
+      description: >
+        Operación exclusiva del administrador global de plataforma configurado en servidor
+        (`NEXORA_GLOBAL_ADMIN_SUB`). Exige JWT asimétrico válido, sesión viva verificada en
+        Supabase Auth (`GET /user`), MFA `aal2` con desafío reciente en `amr` (nunca `iat`),
+        clave de idempotencia obligatoria (`Idempotency-Key`) y ejecutor SQL dedicado `app_platform`.
+        Permanece deshabilitada por defecto si falta la configuración global.
+      operationId: createPlatformCompany
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlatformCreateCompanyRequest'
+      responses:
+        '201':
+          description: Empresa y primer administrador creados atómicamente con auditoría durable
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Cache-Control:
+              $ref: '#/components/headers/NoStoreCacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlatformCreateCompanyResponse'
+        '200':
+          description: Repetición idempotente con la misma clave y solicitud canónica
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Cache-Control:
+              $ref: '#/components/headers/NoStoreCacheControl'
+            X-Idempotency-Replayed:
+              $ref: '#/components/headers/XIdempotencyReplayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlatformCreateCompanyResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+        '429':
+          $ref: '#/components/responses/TooManyRequestsError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailableError'
 components:
   securitySchemes:
     BearerAuth:
@@ -707,6 +769,16 @@ components:
         minimum: 0
         maximum: 10000
         default: 0
+    IdempotencyKeyHeader:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Clave de idempotencia no sensible (1..128 caracteres `[A-Za-z0-9._:-]`).
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: '^[A-Za-z0-9._:-]{1,128}$'
   headers:
     XRequestId:
       description: Identificador de correlación de la solicitud HTTP.
@@ -718,6 +790,17 @@ components:
         type: string
         enum:
           - no-store
+    XIdempotencyReplayed:
+      description: Presente con valor `true` cuando se devuelve el resultado almacenado de una repetición idempotente.
+      schema:
+        type: string
+        enum:
+          - 'true'
+    RetryAfterSeconds:
+      description: Segundos sugeridos antes de reintentar tras superar el límite de solicitudes.
+      schema:
+        type: integer
+        minimum: 1
   responses:
     BadRequestError:
       description: Solicitud inválida o error de validación
@@ -769,6 +852,17 @@ components:
       headers:
         X-Request-Id:
           $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    TooManyRequestsError:
+      description: Límite de solicitudes excedido para operaciones de plataforma
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+        Retry-After:
+          $ref: '#/components/headers/RetryAfterSeconds'
       content:
         application/json:
           schema:
@@ -1144,6 +1238,44 @@ components:
           $ref: '#/components/schemas/MembershipResponse'
         successorMembership:
           $ref: '#/components/schemas/MembershipResponse'
+    PlatformCreateCompanyRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - slug
+        - name
+        - initialAdminUserId
+      properties:
+        slug:
+          type: string
+          minLength: 2
+          maxLength: 63
+          pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$'
+          description: Identificador único legible de la empresa (minúsculas, dígitos y guiones simples).
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: Nombre visible de la empresa.
+        initialAdminUserId:
+          type: string
+          format: uuid
+          description: UUID canónico del usuario verificado con perfil existente que será designado primer `company_admin` activo.
+    PlatformCreateCompanyResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - company
+        - initialAdminMembership
+        - idempotencyReplayed
+      properties:
+        company:
+          $ref: '#/components/schemas/CompanyResponse'
+        initialAdminMembership:
+          $ref: '#/components/schemas/MembershipResponse'
+        idempotencyReplayed:
+          type: boolean
+          description: Indica si la respuesta proviene de una repetición idempotente de una creación ya confirmada.
     FieldError:
       type: object
       additionalProperties: false

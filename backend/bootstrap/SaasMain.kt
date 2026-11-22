@@ -4,6 +4,8 @@ import com.nexora.backend.adapter.http.ktor.nexoraSaasModule
 import com.nexora.backend.adapter.persistence.postgres.JdbcTransactionManager
 import com.nexora.backend.adapter.persistence.postgres.PostgresCompanyQueryRepository
 import com.nexora.backend.adapter.persistence.postgres.PostgresMembershipManagementRepository
+import com.nexora.backend.adapter.persistence.postgres.PostgresPlatformCompanyRepository
+import com.nexora.backend.adapter.persistence.postgres.PostgresPlatformPool
 import com.nexora.backend.adapter.persistence.postgres.PostgresProfileRepository
 import com.nexora.backend.adapter.persistence.postgres.PostgresRuntimePool
 import com.nexora.backend.application.health.HealthService
@@ -11,6 +13,7 @@ import com.nexora.backend.application.health.ReadinessCheck
 import com.nexora.backend.application.multitenant.CompanyQueryService
 import com.nexora.backend.application.multitenant.MembershipManagementService
 import com.nexora.backend.application.multitenant.ProfileService
+import com.nexora.backend.application.platform.PlatformCompanyService
 import io.ktor.server.application.ApplicationStopped
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
@@ -23,6 +26,10 @@ fun main() {
     val runtimePool = config.database?.let { dbConfig ->
         logger.info("Initializing PostgreSQL runtime pool with {}", dbConfig)
         PostgresRuntimePool.create(dbConfig, failFast = true)
+    }
+    val platformPool = config.platformDatabase?.let { platformDbConfig ->
+        logger.info("Initializing PostgreSQL platform executor pool with {}", platformDbConfig)
+        PostgresPlatformPool.create(platformDbConfig, failFast = true)
     }
 
     val readinessChecks = linkedMapOf<String, ReadinessCheck>()
@@ -41,6 +48,9 @@ fun main() {
             managementRepository = PostgresMembershipManagementRepository(),
         )
     }
+    val platformCompanyService = platformPool?.let { pool ->
+        PlatformCompanyService(PostgresPlatformCompanyRepository(pool))
+    }
 
     val healthService = HealthService(
         serviceName = config.serviceName,
@@ -53,10 +63,11 @@ fun main() {
         host = config.host,
         port = config.port,
     ) {
-        if (runtimePool != null) {
+        if (runtimePool != null || platformPool != null) {
             monitor.subscribe(ApplicationStopped) {
-                logger.info("Closing PostgreSQL runtime pool...")
-                runtimePool.close()
+                logger.info("Closing PostgreSQL pools...")
+                runtimePool?.close()
+                platformPool?.close()
             }
         }
         nexoraSaasModule(
@@ -65,6 +76,7 @@ fun main() {
             profileService = profileService,
             companyQueryService = companyQueryService,
             membershipManagementService = membershipManagementService,
+            platformCompanyService = platformCompanyService,
         )
     }
 
@@ -75,6 +87,7 @@ fun main() {
                 server.stop(config.shutdownGracePeriodMs, config.shutdownTimeoutMs)
             } finally {
                 runtimePool?.close()
+                platformPool?.close()
             }
         },
     )
