@@ -15,7 +15,6 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.auth.authenticate
 import io.ktor.server.auth.principal
-import io.ktor.server.request.receive
 import io.ktor.server.response.header
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
@@ -88,7 +87,7 @@ fun Route.registerMultitenantRoutes(
         put("/api/v1/me/profile") {
             val principal = call.requireVerifiedPrincipal()
             val service = profileService ?: throw persistenceUnavailable()
-            val request = call.receive<UpsertProfileRequest>()
+            val request = call.receiveBoundedJson(UpsertProfileRequest::class.java)
             val profile = service.upsertMyProfile(
                 principal = principal,
                 rawDisplayName = request.displayName,

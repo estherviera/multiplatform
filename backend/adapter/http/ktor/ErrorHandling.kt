@@ -1,6 +1,9 @@
 package com.nexora.backend.adapter.http.ktor
 
 import com.fasterxml.jackson.core.JsonProcessingException
+import com.fasterxml.jackson.databind.DeserializationFeature
+import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.module.kotlin.KotlinModule
 import com.nexora.backend.application.multitenant.DomainConflictException
 import com.nexora.backend.application.multitenant.DomainValidationException
 import com.nexora.backend.application.multitenant.ForbiddenOperationException
@@ -8,16 +11,24 @@ import com.nexora.backend.application.multitenant.ProfileIdentityConflictExcepti
 import com.nexora.backend.application.multitenant.ResourceNotFoundException
 import com.nexora.backend.application.persistence.MissingIdentityContextException
 import org.postgresql.util.PSQLException
+import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
+import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.install
 import io.ktor.server.plugins.BadRequestException
 import io.ktor.server.plugins.ContentTransformationException
 import io.ktor.server.plugins.callid.callId
 import io.ktor.server.plugins.statuspages.StatusPages
+import io.ktor.server.request.contentLength
+import io.ktor.server.request.contentType
 import io.ktor.server.request.httpMethod
 import io.ktor.server.request.path
+import io.ktor.server.request.receiveChannel
 import io.ktor.server.response.respond
+import io.ktor.utils.io.readAvailable
+import java.io.ByteArrayOutputStream
+import java.nio.charset.StandardCharsets
 import org.slf4j.LoggerFactory
 
 data class FieldError(
@@ -73,6 +84,56 @@ class PayloadTooLargeApiException(
     code: String = "payload_too_large",
     message: String = "Payload too large",
 ) : ApiException(HttpStatusCode.PayloadTooLarge, code, message)
+
+class UnsupportedMediaTypeApiException(
+    code: String = "unsupported_media_type",
+    message: String = "Unsupported media type",
+) : ApiException(HttpStatusCode.UnsupportedMediaType, code, message)
+
+private const val DEFAULT_MAX_JSON_BODY_BYTES = 16_384
+
+private val strictJsonBodyMapper: ObjectMapper = ObjectMapper()
+    .registerModule(KotlinModule.Builder().build())
+    .enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+    .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+
+internal suspend fun <T> ApplicationCall.receiveBoundedJson(
+    targetType: Class<T>,
+    maxBytes: Int = DEFAULT_MAX_JSON_BODY_BYTES,
+): T {
+    if (!request.contentType().withoutParameters().match(ContentType.Application.Json)) {
+        throw UnsupportedMediaTypeApiException()
+    }
+    val declaredLength = request.contentLength()
+    if (declaredLength != null && declaredLength > maxBytes) {
+        throw PayloadTooLargeApiException(
+            code = "payload_too_large",
+            message = "Request body exceeds maximum allowed size",
+        )
+    }
+    val channel = receiveChannel()
+    val out = ByteArrayOutputStream()
+    val buf = ByteArray(2048)
+    var total = 0
+    while (!channel.isClosedForRead) {
+        val read = channel.readAvailable(buf, 0, buf.size)
+        if (read == -1) break
+        if (read == 0) continue
+        total += read
+        if (total > maxBytes) {
+            throw PayloadTooLargeApiException(
+                code = "payload_too_large",
+                message = "Request body exceeds maximum allowed size",
+            )
+        }
+        out.write(buf, 0, read)
+    }
+    val payload = String(out.toByteArray(), StandardCharsets.UTF_8)
+    if (payload.isBlank()) {
+        throw BadRequestApiException(code = "invalid_json", message = "Malformed JSON payload")
+    }
+    return strictJsonBodyMapper.readValue(payload, targetType)
+}
 
 class ServiceUnavailableApiException(
     code: String = "service_unavailable",

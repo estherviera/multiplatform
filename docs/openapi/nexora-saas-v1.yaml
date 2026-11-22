@@ -3,7 +3,7 @@ info:
   title: Nexora SaaS API
   version: 0.5.0-alpha
   description: >
-    Contrato OpenAPI del backend Ktor SaaS de Nexora (Fase 1 + Fases 2C.1, 2C.2, 2C.3A y 2C.3B).
+    Contrato OpenAPI del backend Ktor SaaS de Nexora (Fase 1 + Fases 2C.1, 2C.2, 2C.3A, 2C.3B, 2C.3C y auditoría integral 2D).
     Incluye salud operativa, autenticación JWT asimétrica mediante Supabase Auth/JWKS,
     gestión idempotente del propio perfil, consultas multiempresa, gestión segura de
     invitaciones, roles, suspensiones y sustitución atómica de administradores protegida
@@ -60,6 +60,8 @@ paths:
           headers:
             X-Request-Id:
               $ref: '#/components/headers/XRequestId'
+            Cache-Control:
+              $ref: '#/components/headers/NoStoreCacheControl'
           content:
             application/json:
               schema:
@@ -71,6 +73,8 @@ paths:
           headers:
             X-Request-Id:
               $ref: '#/components/headers/XRequestId'
+            Cache-Control:
+              $ref: '#/components/headers/NoStoreCacheControl'
           content:
             application/json:
               schema:
@@ -166,6 +170,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          $ref: '#/components/responses/PayloadTooLargeError'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaTypeError'
         '503':
           $ref: '#/components/responses/ServiceUnavailableError'
   /api/v1/me/companies:
@@ -344,6 +352,10 @@ paths:
           $ref: '#/components/responses/NotFoundError'
         '409':
           $ref: '#/components/responses/ConflictError'
+        '413':
+          $ref: '#/components/responses/PayloadTooLargeError'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaTypeError'
         '503':
           $ref: '#/components/responses/ServiceUnavailableError'
     get:
@@ -541,6 +553,10 @@ paths:
           $ref: '#/components/responses/NotFoundError'
         '409':
           $ref: '#/components/responses/ConflictError'
+        '413':
+          $ref: '#/components/responses/PayloadTooLargeError'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaTypeError'
         '503':
           $ref: '#/components/responses/ServiceUnavailableError'
   /api/v1/companies/{companyId}/memberships/{userId}/suspend:
@@ -651,6 +667,10 @@ paths:
           $ref: '#/components/responses/NotFoundError'
         '409':
           $ref: '#/components/responses/ConflictError'
+        '413':
+          $ref: '#/components/responses/PayloadTooLargeError'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaTypeError'
         '503':
           $ref: '#/components/responses/ServiceUnavailableError'
   /api/v1/platform/companies:
@@ -708,6 +728,8 @@ paths:
           $ref: '#/components/responses/ForbiddenError'
         '409':
           $ref: '#/components/responses/ConflictError'
+        '413':
+          $ref: '#/components/responses/PayloadTooLargeError'
         '429':
           $ref: '#/components/responses/TooManyRequestsError'
         '503':
@@ -863,6 +885,24 @@ components:
           $ref: '#/components/headers/XRequestId'
         Retry-After:
           $ref: '#/components/headers/RetryAfterSeconds'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    PayloadTooLargeError:
+      description: Cuerpo de solicitud excede el tamaño máximo permitido
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    UnsupportedMediaTypeError:
+      description: Tipo de contenido no soportado (se requiere application/json)
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
       content:
         application/json:
           schema:

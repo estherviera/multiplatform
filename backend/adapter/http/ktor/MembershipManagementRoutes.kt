@@ -14,7 +14,6 @@ import io.ktor.server.application.ApplicationCall
 import io.ktor.server.auth.authenticate
 import io.ktor.server.auth.principal
 import io.ktor.server.plugins.callid.callId
-import io.ktor.server.request.receive
 import io.ktor.server.response.header
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
@@ -64,7 +63,7 @@ fun Route.registerMembershipManagementRoutes(
             val principal = call.requirePrincipal2C2()
             val service = membershipManagementService ?: throw persistenceUnavailable2C2()
             val companyId = call.parseUuidPathParam("companyId", "invalid_company_id", "Invalid company identifier")
-            val body = call.receive<CreateInvitationRequest>()
+            val body = call.receiveBoundedJson(CreateInvitationRequest::class.java)
             val inviteeId = parseUuidBodyField(body.inviteeUserId, "inviteeUserId")
 
             val outcome = service.createInvitation(
@@ -146,7 +145,7 @@ fun Route.registerMembershipManagementRoutes(
             val service = membershipManagementService ?: throw persistenceUnavailable2C2()
             val companyId = call.parseUuidPathParam("companyId", "invalid_company_id", "Invalid company identifier")
             val targetUserId = call.parseUuidPathParam("userId", "invalid_user_id", "Invalid user identifier")
-            val body = call.receive<ChangeRoleRequest>()
+            val body = call.receiveBoundedJson(ChangeRoleRequest::class.java)
             val updated = service.changeMemberRole(principal, companyId, targetUserId, body.role, call.callId)
             call.response.header(HttpHeaders.CacheControl, "no-store")
             call.respond(HttpStatusCode.OK, updated.toMembershipResponse())
@@ -176,7 +175,7 @@ fun Route.registerMembershipManagementRoutes(
             val principal = call.requirePrincipal2C2()
             val service = membershipManagementService ?: throw persistenceUnavailable2C2()
             val companyId = call.parseUuidPathParam("companyId", "invalid_company_id", "Invalid company identifier")
-            val body = call.receive<ReplaceAdminRequest>()
+            val body = call.receiveBoundedJson(ReplaceAdminRequest::class.java)
             val outgoingId = parseUuidBodyField(body.outgoingAdminUserId, "outgoingAdminUserId")
             val successorId = parseUuidBodyField(body.successorUserId, "successorUserId")
             val result = service.replaceAdmin(

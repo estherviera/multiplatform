@@ -31,10 +31,15 @@ private class NexoraJwtAuthenticationProvider(
 
     override suspend fun onAuthenticate(context: AuthenticationContext) {
         val call = context.call
-        val rawHeader = call.request.headers[HttpHeaders.Authorization]
-        val token = extractBearerToken(rawHeader)
+        val authHeaders = call.request.headers.getAll(HttpHeaders.Authorization).orEmpty()
+        val rawHeader = if (authHeaders.size == 1) authHeaders.first() else null
+        val token = if (authHeaders.size > 1) null else extractBearerToken(rawHeader)
         if (token == null) {
-            val code = if (rawHeader.isNullOrBlank()) "missing_token" else "invalid_authorization_header"
+            val code = if (authHeaders.isEmpty() || (authHeaders.size == 1 && rawHeader.isNullOrBlank())) {
+                "missing_token"
+            } else {
+                "invalid_authorization_header"
+            }
             context.challenge(NEXORA_JWT_AUTH, AuthenticationFailedCause.NoCredentials) { challenge, challengeCall ->
                 challengeCall.response.header(HttpHeaders.WWWAuthenticate, """Bearer realm="nexora", error="invalid_token"""")
                 challengeCall.respond(

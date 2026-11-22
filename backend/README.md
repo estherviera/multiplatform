@@ -77,29 +77,30 @@ Por defecto escucha en `http://127.0.0.1:8080`. Variables de entorno soportadas:
 | `NEXORA_DB_PREPARE_THRESHOLD` | *(por defecto del driver)* | Opcional (`0..100`); útil con valor `0` para poolers en modo transacción |
 | `NEXORA_DB_IO_PARALLELISM` | `maxPoolSize` | Paralelismo acotado del dispatcher de E/S bloqueante (`1..64`) |
 
-### Endpoints implementados (Fase 1 + Fases 2C.1 y 2C.2)
+### Endpoints implementados (Fase 1 + Fases 2C.1, 2C.2, 2C.3 y auditoría 2D)
 
 | Método | Ruta | Autenticación | Resultado |
 | --- | --- | --- | --- |
 | GET | `/health/live` | Pública | Liveness pública mínima (`200`, `{"status":"ok"}`) |
-| GET | `/health/ready` | Token operativo opcional/obligatorio | Readiness operativa (`200` listo, `503` degradado, `401` si falta o falla `X-Nexora-Readiness-Token` cuando está configurado). Cuando PostgreSQL está habilitado, incluye el estado `checks.database` |
-| GET | `/api/v1/auth/me` | `Authorization: Bearer <jwt>` | Identidad verificada (`userId` UUID de `sub`, `issuer`, `audience`, `sessionId`, `aal`, `expiresAt`) con `Cache-Control: no-store`. Devuelve `401` ante token ausente/inválido/expirado y `503` con fallo cerrado si el verificador no está configurado o JWKS no responde |
+| GET | `/health/ready` | Token operativo opcional/obligatorio | Readiness operativa con `Cache-Control: no-store` (`200` listo, `503` degradado, `401` si falta, se duplica o falla `X-Nexora-Readiness-Token` cuando está configurado). Cuando PostgreSQL está habilitado, incluye `checks.database` |
+| GET | `/api/v1/auth/me` | `Authorization: Bearer <jwt>` | Identidad verificada (`userId` UUID de `sub`, `issuer`, `audience`, `sessionId`, `aal`, `expiresAt`) con `Cache-Control: no-store`. Rechaza cabeceras `Authorization` duplicadas (`401`), tokens ausentes/inválidos/expirados (`401`) y falla cerrado (`503`) si el verificador no está configurado o JWKS no responde |
 | GET | `/api/v1/me/profile` | `Authorization: Bearer <jwt>` | Perfil propio (`200`) o `404 profile_not_found` si todavía no existe (`Cache-Control: no-store`) |
-| PUT | `/api/v1/me/profile` | `Authorization: Bearer <jwt>` | Creación idempotente o actualización de `displayName` y `avatarPath` vinculados exclusivamente al `sub` del JWT (`200`, `400`, `409`, `503`) |
+| PUT | `/api/v1/me/profile` | `Authorization: Bearer <jwt>` | Creación idempotente o actualización de `displayName` y `avatarPath` vinculados exclusivamente al `sub` del JWT (`200`, `400`, `409`, `413` > 16 KiB, `415`, `503`) |
 | GET | `/api/v1/me/companies` | `Authorization: Bearer <jwt>` | Listado paginado (`limit` 1..100, `offset` 0..10000) de empresas activas donde el usuario es miembro activo junto a su rol |
 | GET | `/api/v1/companies/{companyId}` | `Authorization: Bearer <jwt>` | Detalle de empresa activa (`200`), `400` si `companyId` no es UUID o `404` uniforme si no existe, está suspendida o es ajena |
 | GET | `/api/v1/companies/{companyId}/membership` | `Authorization: Bearer <jwt>` | Membresía activa propia en esa empresa (`200`) o `404` uniforme |
 | GET | `/api/v1/companies/{companyId}/memberships` | `Authorization: Bearer <jwt>` | Listado paginado de membresías visibles según RLS (`company_admin` ve todas las de su empresa; `trainer`/`member` solo su propia fila activa; `404` uniforme para empresas ajenas/suspendidas o sin membresía activa) |
-| POST | `/api/v1/companies/{companyId}/invitations` | `Authorization: Bearer <jwt>` (`company_admin`) | Crea invitación idempotente para un usuario elegible con perfil verificado (`201`/`200`, `403`, `404`, `409`) con auditoría |
+| POST | `/api/v1/companies/{companyId}/invitations` | `Authorization: Bearer <jwt>` (`company_admin`) | Crea invitación idempotente para un usuario elegible con perfil verificado (`201`/`200`, `403`, `404`, `409`, `413` > 16 KiB, `415`) con auditoría |
 | GET | `/api/v1/companies/{companyId}/invitations` | `Authorization: Bearer <jwt>` (`company_admin`) | Listado paginado de invitaciones de la empresa |
 | GET | `/api/v1/me/invitations` | `Authorization: Bearer <jwt>` | Listado paginado de invitaciones dirigidas al usuario autenticado |
 | GET | `/api/v1/me/invitations/{invitationId}` | `Authorization: Bearer <jwt>` (destinatario) | Consulta de invitación propia (`200`) o `404` si es ajena |
 | POST | `/api/v1/me/invitations/{invitationId}/accept` | `Authorization: Bearer <jwt>` (destinatario) | Aceptación atómica e idempotente mediante `nexora.accept_company_invitation(...)` (`200`, `404`, `409`) con auditoría |
 | POST | `/api/v1/me/invitations/{invitationId}/decline` | `Authorization: Bearer <jwt>` (destinatario) | Rechazo explícito e idempotente (`200`, `404`, `409`) con auditoría |
-| PATCH | `/api/v1/companies/{companyId}/memberships/{userId}/role` | `Authorization: Bearer <jwt>` (`company_admin`) | Cambio de rol auditado; bloquea dejar la empresa sin administrador activo (`409 last_active_admin_required`) |
+| PATCH | `/api/v1/companies/{companyId}/memberships/{userId}/role` | `Authorization: Bearer <jwt>` (`company_admin`) | Cambio de rol auditado; bloquea dejar la empresa sin administrador activo (`409 last_active_admin_required`, `413` > 16 KiB, `415`) |
 | POST | `/api/v1/companies/{companyId}/memberships/{userId}/suspend` | `Authorization: Bearer <jwt>` (`company_admin`) | Suspensión auditada; protege al último administrador activo (`409`) |
 | POST | `/api/v1/companies/{companyId}/memberships/{userId}/reactivate` | `Authorization: Bearer <jwt>` (`company_admin`) | Reactivación auditada de membresía suspendida (no salta aceptación de invitaciones) |
-| POST | `/api/v1/companies/{companyId}/admins/replace` | `Authorization: Bearer <jwt>` (`company_admin`) | Sustitución atómica y auditada de un administrador activo por un sucesor activo |
+| POST | `/api/v1/companies/{companyId}/admins/replace` | `Authorization: Bearer <jwt>` (`company_admin`) | Sustitución atómica y auditada de un administrador activo por un sucesor activo (`413` > 16 KiB, `415`) |
+| POST | `/api/v1/platform/companies` | `Authorization: Bearer <jwt>` (admin global + sesión viva + MFA `aal2` reciente) | Alta atómica e idempotente (`Idempotency-Key`) de empresa + primer `company_admin` vía `app_platform` (`201`/`200`, `400`, `401`, `403`, `409`, `413` > 8 KiB, `429`, `503`) |
 
 Todas las respuestas incluyen la cabecera `X-Request-Id`. Los errores HTTP devuelven un sobre JSON uniforme sin trazas, contraseñas, tokens ni detalles internos:
 
@@ -210,4 +211,4 @@ El endpoint `POST /api/v1/platform/companies` está deshabilitado por defecto si
 
 **Verificación real en Supabase Auth local (`supabase_auth_nexora_prephase`, GoTrue v2.197.0 sobre `127.0.0.1:55421`):** el entorno local habilita MFA TOTP (`[auth.mfa.totp]` en `infra/local/supabase/config.toml` y `GOTRUE_MFA_TOTP_ENROLL_ENABLED=true` / `GOTRUE_MFA_TOTP_VERIFY_ENABLED=true` en `infra/local/Bind-LocalPorts.cjs`, conservando el enlace exclusivo a loopback). Se ha verificado de extremo a extremo contra GoTrue real y PostgreSQL 17 real: denegación de `aal1`, inscripción/desafío/verificación TOTP con autorización positiva `aal2`, alta atómica de empresa + primer `company_admin`, visibilidad inmediata bajo RLS real, idempotencia y concurrencia por `slug`/`Idempotency-Key`, rollback completo ante administrador inelegible, auditoría de éxitos/denegaciones/fallos, invariancia de `amr[totp].timestamp` al renovar, expiración MFA, revocación inmediata tras `POST /logout` y aislamiento `42501` frente a `app_runtime`.
 
-**Pendiente de incrementos posteriores:** revisión y pruebas de cierre de plataforma (`2C.3C`), auditoría integral de cierre de Fase 2 (`2D`) y configuración de despliegue remoto/CI.
+**Pendiente de fases posteriores:** módulos educativos de Fase 3+ (cursos, catálogo público, matrículas, vídeo/Storage, chat y clientes Android/web), configuración de despliegue remoto/staging/CI y rate limiting distribuido para despliegues multirréplica.

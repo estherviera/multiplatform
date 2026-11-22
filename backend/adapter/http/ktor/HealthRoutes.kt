@@ -1,7 +1,9 @@
 package com.nexora.backend.adapter.http.ktor
 
 import com.nexora.backend.application.health.HealthService
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.server.response.header
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
@@ -19,8 +21,10 @@ fun Route.registerHealthRoutes(
     }
 
     get("/health/ready") {
+        call.response.header(HttpHeaders.CacheControl, "no-store")
         if (readinessToken != null) {
-            val provided = call.request.headers[READINESS_TOKEN_HEADER]
+            val providedHeaders = call.request.headers.getAll(READINESS_TOKEN_HEADER).orEmpty()
+            val provided = if (providedHeaders.size == 1) providedHeaders.first() else null
             if (provided == null || !constantTimeEquals(provided, readinessToken)) {
                 throw UnauthorizedApiException(
                     code = "invalid_readiness_token",
