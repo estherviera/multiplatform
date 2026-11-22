@@ -1,6 +1,7 @@
 package com.nexora.backend.adapter.http.ktor
 
 import com.fasterxml.jackson.core.JsonProcessingException
+import com.nexora.backend.application.persistence.MissingIdentityContextException
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
 import io.ktor.server.application.install
@@ -85,6 +86,19 @@ fun Application.configureErrorHandling() {
                         message = cause.message,
                         requestId = call.callId,
                         details = cause.details?.takeIf { it.isNotEmpty() },
+                    ),
+                ),
+            )
+        }
+
+        exception<MissingIdentityContextException> { call, _ ->
+            call.respond(
+                HttpStatusCode.Unauthorized,
+                ApiErrorResponse(
+                    error = ErrorDetail(
+                        code = "missing_identity_context",
+                        message = "Authenticated identity is required",
+                        requestId = call.callId,
                     ),
                 ),
             )

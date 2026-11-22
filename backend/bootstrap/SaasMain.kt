@@ -1,7 +1,11 @@
 package com.nexora.backend.bootstrap
 
 import com.nexora.backend.adapter.http.ktor.nexoraSaasModule
+import com.nexora.backend.adapter.persistence.postgres.JdbcTransactionManager
+import com.nexora.backend.adapter.persistence.postgres.PostgresRuntimePool
 import com.nexora.backend.application.health.HealthService
+import com.nexora.backend.application.health.ReadinessCheck
+import io.ktor.server.application.ApplicationStopped
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
 import org.slf4j.LoggerFactory
@@ -10,9 +14,21 @@ private val logger = LoggerFactory.getLogger("com.nexora.backend.bootstrap.SaasM
 
 fun main() {
     val config = AppConfig.fromEnv()
+    val runtimePool = config.database?.let { dbConfig ->
+        logger.info("Initializing PostgreSQL runtime pool with {}", dbConfig)
+        PostgresRuntimePool.create(dbConfig, failFast = true)
+    }
+
+    val readinessChecks = linkedMapOf<String, ReadinessCheck>()
+    if (runtimePool != null) {
+        val transactionManager = JdbcTransactionManager(runtimePool)
+        readinessChecks["database"] = runtimePool.readinessCheck(transactionManager)
+    }
+
     val healthService = HealthService(
         serviceName = config.serviceName,
         environment = config.environment.wireName,
+        readinessChecks = readinessChecks,
     )
 
     val server = embeddedServer(
@@ -20,13 +36,23 @@ fun main() {
         host = config.host,
         port = config.port,
     ) {
+        if (runtimePool != null) {
+            monitor.subscribe(ApplicationStopped) {
+                logger.info("Closing PostgreSQL runtime pool...")
+                runtimePool.close()
+            }
+        }
         nexoraSaasModule(config, healthService)
     }
 
     Runtime.getRuntime().addShutdownHook(
         Thread {
             logger.info("Stopping Nexora SaaS API...")
-            server.stop(config.shutdownGracePeriodMs, config.shutdownTimeoutMs)
+            try {
+                server.stop(config.shutdownGracePeriodMs, config.shutdownTimeoutMs)
+            } finally {
+                runtimePool?.close()
+            }
         },
     )
 

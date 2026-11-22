@@ -1,6 +1,7 @@
 package com.nexora.backend.bootstrap
 
 import com.nexora.backend.adapter.auth.JwtAuthConfig
+import com.nexora.backend.adapter.persistence.postgres.DatabaseConfig
 import java.net.URI
 
 enum class AppEnvironment(val wireName: String) {
@@ -33,6 +34,7 @@ data class AppConfig(
     val shutdownGracePeriodMs: Long,
     val shutdownTimeoutMs: Long,
     val auth: JwtAuthConfig? = null,
+    val database: DatabaseConfig? = null,
 ) {
     init {
         require(host.isNotBlank()) { "NEXORA_HOST must not be blank" }
@@ -54,13 +56,18 @@ data class AppConfig(
         if (auth != null) {
             validateAuthTransport(auth, environment)
         }
+        if (database != null && environment.isRestricted) {
+            require(database.sslMode in DatabaseConfig.STRICT_SSL_MODES) {
+                "NEXORA_RUNTIME_SSL_MODE must be verify-ca or verify-full in ${environment.wireName} environment"
+            }
+        }
     }
 
     override fun toString(): String =
         "AppConfig(environment=${environment.wireName}, host=$host, port=$port, serviceName=$serviceName, " +
             "corsAllowedOrigins=$corsAllowedOrigins, readinessTokenConfigured=${readinessToken != null}, " +
-            "authConfigured=${auth != null}, shutdownGracePeriodMs=$shutdownGracePeriodMs, " +
-            "shutdownTimeoutMs=$shutdownTimeoutMs)"
+            "authConfigured=${auth != null}, databaseConfigured=${database != null}, " +
+            "shutdownGracePeriodMs=$shutdownGracePeriodMs, shutdownTimeoutMs=$shutdownTimeoutMs)"
 
     companion object {
         const val DEFAULT_HOST = "127.0.0.1"
@@ -80,6 +87,7 @@ data class AppConfig(
             val graceMs = parseLong(env["NEXORA_SHUTDOWN_GRACE_MS"], DEFAULT_SHUTDOWN_GRACE_MS, "NEXORA_SHUTDOWN_GRACE_MS")
             val timeoutMs = parseLong(env["NEXORA_SHUTDOWN_TIMEOUT_MS"], DEFAULT_SHUTDOWN_TIMEOUT_MS, "NEXORA_SHUTDOWN_TIMEOUT_MS")
             val auth = parseAuthConfig(env, environment)
+            val database = parseDatabaseConfig(env, environment)
 
             return AppConfig(
                 environment = environment,
@@ -91,6 +99,96 @@ data class AppConfig(
                 shutdownGracePeriodMs = graceMs,
                 shutdownTimeoutMs = timeoutMs,
                 auth = auth,
+                database = database,
+            )
+        }
+
+        private fun parseDatabaseConfig(env: Map<String, String>, environment: AppEnvironment): DatabaseConfig? {
+            val enabledRaw = env["NEXORA_DB_ENABLED"]?.trim()?.takeIf { it.isNotEmpty() }
+            val explicitEnabled = enabledRaw?.let { parseBoolean(it, false, "NEXORA_DB_ENABLED") }
+            if (explicitEnabled == false) return null
+
+            val jdbcUrl = env["NEXORA_RUNTIME_JDBC_URL"]?.trim()?.takeIf { it.isNotEmpty() }
+            val username = env["NEXORA_RUNTIME_USER"]?.trim()?.takeIf { it.isNotEmpty() }
+            val password = env["NEXORA_RUNTIME_PASSWORD"]?.takeIf { it.isNotEmpty() }
+
+            val anyRuntimeVarPresent = jdbcUrl != null || username != null || password != null
+            if (explicitEnabled == null && !anyRuntimeVarPresent) {
+                return null
+            }
+
+            require(jdbcUrl != null) { "NEXORA_RUNTIME_JDBC_URL is required when database persistence is enabled" }
+            require(username != null) { "NEXORA_RUNTIME_USER is required when database persistence is enabled" }
+            require(password != null) { "NEXORA_RUNTIME_PASSWORD is required when database persistence is enabled" }
+
+            val schema = env["NEXORA_RUNTIME_SCHEMA"]?.trim()?.takeIf { it.isNotEmpty() }
+                ?: DatabaseConfig.DEFAULT_SCHEMA
+            val defaultSsl = if (environment.isRestricted) {
+                DatabaseConfig.DEFAULT_RESTRICTED_SSL_MODE
+            } else {
+                DatabaseConfig.DEFAULT_LOCAL_SSL_MODE
+            }
+            val sslMode = env["NEXORA_RUNTIME_SSL_MODE"]?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
+                ?: defaultSsl
+            val maxPoolSize = parseInt(env["NEXORA_DB_MAX_POOL_SIZE"], DatabaseConfig.DEFAULT_MAX_POOL_SIZE, "NEXORA_DB_MAX_POOL_SIZE")
+            val minIdle = parseInt(
+                env["NEXORA_DB_MIN_IDLE"],
+                minOf(DatabaseConfig.DEFAULT_MIN_IDLE, maxPoolSize),
+                "NEXORA_DB_MIN_IDLE",
+            )
+            val connectionTimeoutMs = parseLong(
+                env["NEXORA_DB_CONNECTION_TIMEOUT_MS"],
+                DatabaseConfig.DEFAULT_CONNECTION_TIMEOUT_MS,
+                "NEXORA_DB_CONNECTION_TIMEOUT_MS",
+            )
+            val idleTimeoutMs = parseLong(
+                env["NEXORA_DB_IDLE_TIMEOUT_MS"],
+                DatabaseConfig.DEFAULT_IDLE_TIMEOUT_MS,
+                "NEXORA_DB_IDLE_TIMEOUT_MS",
+            )
+            val maxLifetimeMs = parseLong(
+                env["NEXORA_DB_MAX_LIFETIME_MS"],
+                DatabaseConfig.DEFAULT_MAX_LIFETIME_MS,
+                "NEXORA_DB_MAX_LIFETIME_MS",
+            )
+            val statementTimeoutMs = parseInt(
+                env["NEXORA_DB_STATEMENT_TIMEOUT_MS"],
+                DatabaseConfig.DEFAULT_STATEMENT_TIMEOUT_MS,
+                "NEXORA_DB_STATEMENT_TIMEOUT_MS",
+            )
+            val lockTimeoutMs = parseInt(
+                env["NEXORA_DB_LOCK_TIMEOUT_MS"],
+                DatabaseConfig.DEFAULT_LOCK_TIMEOUT_MS,
+                "NEXORA_DB_LOCK_TIMEOUT_MS",
+            )
+            val idleTxTimeoutMs = parseInt(
+                env["NEXORA_DB_IDLE_TX_TIMEOUT_MS"],
+                DatabaseConfig.DEFAULT_IDLE_TX_TIMEOUT_MS,
+                "NEXORA_DB_IDLE_TX_TIMEOUT_MS",
+            )
+            val prepareThresholdRaw = env["NEXORA_DB_PREPARE_THRESHOLD"]?.trim()?.takeIf { it.isNotEmpty() }
+            val prepareThreshold = prepareThresholdRaw?.let {
+                it.toIntOrNull()
+                    ?: throw IllegalArgumentException("NEXORA_DB_PREPARE_THRESHOLD must be a valid integer, got '$it'")
+            }
+            val ioParallelism = parseInt(env["NEXORA_DB_IO_PARALLELISM"], maxPoolSize, "NEXORA_DB_IO_PARALLELISM")
+
+            return DatabaseConfig(
+                jdbcUrl = jdbcUrl,
+                username = username,
+                password = password,
+                schema = schema,
+                sslMode = sslMode,
+                maxPoolSize = maxPoolSize,
+                minIdle = minIdle,
+                connectionTimeoutMs = connectionTimeoutMs,
+                idleTimeoutMs = idleTimeoutMs,
+                maxLifetimeMs = maxLifetimeMs,
+                statementTimeoutMs = statementTimeoutMs,
+                lockTimeoutMs = lockTimeoutMs,
+                idleInTransactionTimeoutMs = idleTxTimeoutMs,
+                prepareThreshold = prepareThreshold,
+                ioMaxParallelism = ioParallelism,
             )
         }
 
