@@ -17,12 +17,15 @@ dependencies {
 
     implementation("io.ktor:ktor-server-core-jvm")
     implementation("io.ktor:ktor-server-netty-jvm")
+    implementation("io.ktor:ktor-server-auth-jvm")
     implementation("io.ktor:ktor-server-content-negotiation-jvm")
     implementation("io.ktor:ktor-serialization-jackson-jvm")
     implementation("io.ktor:ktor-server-status-pages-jvm")
     implementation("io.ktor:ktor-server-call-id-jvm")
     implementation("io.ktor:ktor-server-call-logging-jvm")
     implementation("io.ktor:ktor-server-cors-jvm")
+
+    implementation("com.nimbusds:nimbus-jose-jwt:10.10")
 
     runtimeOnly("ch.qos.logback:logback-classic:1.5.18")
     runtimeOnly("org.xerial:sqlite-jdbc:3.54.1.0")
@@ -62,4 +65,11 @@ tasks.register<JavaExec>("runSaas") {
     description = "Runs the Ktor SaaS backend entrypoint (separate from the legacy SQLite demo)."
     classpath = sourceSets["main"].runtimeClasspath
     mainClass.set("com.nexora.backend.bootstrap.SaasMainKt")
+}
+
+tasks.withType<Test> {
+    systemProperty("nexora.test.localAuth", System.getProperty("nexora.test.localAuth", "false"))
+    System.getProperty("nexora.test.localAuthUrl")?.let {
+        systemProperty("nexora.test.localAuthUrl", it)
+    }
 }

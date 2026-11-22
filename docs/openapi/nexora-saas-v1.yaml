@@ -1,17 +1,21 @@
 openapi: 3.0.3
 info:
   title: Nexora SaaS API
-  version: 0.1.0-alpha
+  version: 0.2.0-alpha
   description: >
-    Contrato OpenAPI mínimo del incremento 1A (Fase 1) del backend Ktor SaaS de Nexora.
-    Incluye endpoints de salud (liveness y readiness) y el formato estándar de errores HTTP.
-    La autenticación JWT, el acceso a PostgreSQL/JDBC, RLS y las rutas de negocio se añadirán en incrementos posteriores.
+    Contrato OpenAPI de los incrementos 1A y 1B (Fase 1) del backend Ktor SaaS de Nexora.
+    Incluye endpoints de salud (liveness y readiness), formato estándar de errores HTTP
+    y autenticación JWT asimétrica mediante Supabase Auth/JWKS con la operación protegida mínima
+    `/api/v1/auth/me`.
+    El acceso a PostgreSQL/JDBC, Flyway, RLS y las tablas/rutas de negocio se añadirán en incrementos posteriores.
 servers:
   - url: http://127.0.0.1:8080
     description: Entorno local de desarrollo Ktor SaaS
 tags:
   - name: Health
     description: Comprobaciones operativas de liveness y readiness
+  - name: Identity
+    description: Verificación de identidad autenticada mediante JWT de Supabase Auth
 paths:
   /health/live:
     get:
@@ -89,8 +93,81 @@ paths:
                 environment: local
                 checks:
                   database: not_ready
+  /api/v1/auth/me:
+    get:
+      tags:
+        - Identity
+      summary: Devuelve la identidad verificada del usuario autenticado
+      description: >
+        Ruta protegida mínima del incremento 1B. Verifica criptográficamente el access token JWT
+        de Supabase Auth contra las claves públicas JWKS del emisor configurado y construye un
+        principal inmutable a partir del claim `sub` (UUID). No devuelve ni confía en roles
+        empresariales ni metadatos enviados por el cliente.
+      operationId: getAuthenticatedIdentity
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Identidad verificada correctamente
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Cache-Control:
+              description: Evita almacenamiento en caché de la respuesta de identidad.
+              schema:
+                type: string
+                enum:
+                  - no-store
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IdentityResponse'
+              example:
+                userId: 550e8400-e29b-41d4-a716-446655440000
+                issuer: http://127.0.0.1:55421
+                audience: authenticated
+                sessionId: 7d2f8e4a-8c5a-4d7c-9b2a-9e2e5c1a4f10
+                aal: aal1
+                expiresAt: '2026-11-22T20:00:00Z'
+        '401':
+          description: Token ausente, malformado, expirado, con firma/emisor/audiencia inválidos o clase no permitida
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            WWW-Authenticate:
+              description: Desafío Bearer RFC 6750.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  code: invalid_token
+                  message: Invalid access token
+                  requestId: 3d2f8e4a-8c5a-4d7c-9b2a-9e2e5c1a4f10
+        '503':
+          description: Verificador JWT no configurado o JWKS temporalmente no disponible (fallo cerrado)
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  code: auth_verifier_unavailable
+                  message: Authentication verification temporarily unavailable
+                  requestId: 3d2f8e4a-8c5a-4d7c-9b2a-9e2e5c1a4f10
 components:
   securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Access token JWT asimétrico (p.ej. ES256) emitido por Supabase Auth.
     ReadinessToken:
       type: apiKey
       in: header
@@ -142,6 +219,33 @@ components:
             enum:
               - ok
               - not_ready
+    IdentityResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - userId
+        - issuer
+        - audience
+        - expiresAt
+      properties:
+        userId:
+          type: string
+          format: uuid
+          description: Identificador canónico de usuario extraído del claim `sub` verificado.
+        issuer:
+          type: string
+        audience:
+          type: string
+        sessionId:
+          type: string
+          format: uuid
+          nullable: true
+        aal:
+          type: string
+          nullable: true
+        expiresAt:
+          type: string
+          format: date-time
     FieldError:
       type: object
       additionalProperties: false

@@ -90,6 +90,8 @@ class SaasApplicationTest {
             mapOf(
                 "NEXORA_ENV" to "staging",
                 "NEXORA_READINESS_TOKEN" to "ops-token-123",
+                "NEXORA_AUTH_ISSUER" to "https://staging.example.supabase.co/auth/v1",
+                "NEXORA_AUTH_JWKS_URL" to "https://staging.example.supabase.co/auth/v1/.well-known/jwks.json",
             ),
         )
         application {

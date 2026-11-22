@@ -5,6 +5,11 @@ import com.fasterxml.jackson.databind.DeserializationFeature
 import com.fasterxml.jackson.databind.SerializationFeature
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
 import com.fasterxml.jackson.module.kotlin.KotlinModule
+import com.nexora.backend.adapter.auth.CachingJwksKeyProvider
+import com.nexora.backend.adapter.auth.HttpJwksFetcher
+import com.nexora.backend.adapter.auth.NimbusJwtAccessTokenVerifier
+import com.nexora.backend.application.auth.AccessTokenVerifier
+import com.nexora.backend.application.auth.TokenVerificationResult
 import com.nexora.backend.application.health.HealthService
 import com.nexora.backend.bootstrap.AppConfig
 import io.ktor.http.HttpHeaders
@@ -20,6 +25,7 @@ import io.ktor.server.plugins.cors.routing.CORS
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.routing
 import java.net.URI
+import java.time.Duration
 import java.util.UUID
 import org.slf4j.event.Level
 
@@ -28,6 +34,7 @@ private val SAFE_REQUEST_ID_REGEX = Regex("^[A-Za-z0-9._-]{1,64}$")
 fun Application.nexoraSaasModule(
     config: AppConfig,
     healthService: HealthService = HealthService(config.serviceName, config.environment.wireName),
+    accessTokenVerifier: AccessTokenVerifier = defaultAccessTokenVerifier(config),
     additionalRoutes: Route.() -> Unit = {},
 ) {
     install(CallId) {
@@ -73,9 +80,30 @@ fun Application.nexoraSaasModule(
     }
 
     configureErrorHandling()
+    configureJwtAuthentication(accessTokenVerifier)
 
     routing {
         registerHealthRoutes(healthService, config.readinessToken)
+        registerIdentityRoutes()
         additionalRoutes()
     }
+}
+
+private fun defaultAccessTokenVerifier(config: AppConfig): AccessTokenVerifier {
+    val authConfig = config.auth
+        ?: return AccessTokenVerifier { TokenVerificationResult.Unavailable("auth_not_configured") }
+    val fetcher = HttpJwksFetcher(
+        jwksUri = authConfig.jwksUri,
+        timeout = Duration.ofMillis(authConfig.jwksTimeoutMs),
+    )
+    val keyProvider = CachingJwksKeyProvider(
+        fetcher = fetcher,
+        cacheTtl = Duration.ofSeconds(authConfig.jwksCacheTtlSeconds),
+        minRefreshInterval = Duration.ofSeconds(authConfig.jwksMinRefreshSeconds),
+        maxKeys = authConfig.maxCachedKeys,
+    )
+    return NimbusJwtAccessTokenVerifier(
+        config = authConfig,
+        keyProvider = keyProvider,
+    )
 }

@@ -1,5 +1,6 @@
 package com.nexora.backend.bootstrap
 
+import com.nexora.backend.adapter.auth.JwtAuthConfig
 import java.net.URI
 
 enum class AppEnvironment(val wireName: String) {
@@ -31,6 +32,7 @@ data class AppConfig(
     val readinessToken: String?,
     val shutdownGracePeriodMs: Long,
     val shutdownTimeoutMs: Long,
+    val auth: JwtAuthConfig? = null,
 ) {
     init {
         require(host.isNotBlank()) { "NEXORA_HOST must not be blank" }
@@ -45,13 +47,20 @@ data class AppConfig(
             require(!readinessToken.isNullOrBlank()) {
                 "NEXORA_READINESS_TOKEN is required in ${environment.wireName} environment"
             }
+            require(auth != null) {
+                "NEXORA_AUTH_ISSUER and NEXORA_AUTH_JWKS_URL are required in ${environment.wireName} environment"
+            }
+        }
+        if (auth != null) {
+            validateAuthTransport(auth, environment)
         }
     }
 
     override fun toString(): String =
         "AppConfig(environment=${environment.wireName}, host=$host, port=$port, serviceName=$serviceName, " +
             "corsAllowedOrigins=$corsAllowedOrigins, readinessTokenConfigured=${readinessToken != null}, " +
-            "shutdownGracePeriodMs=$shutdownGracePeriodMs, shutdownTimeoutMs=$shutdownTimeoutMs)"
+            "authConfigured=${auth != null}, shutdownGracePeriodMs=$shutdownGracePeriodMs, " +
+            "shutdownTimeoutMs=$shutdownTimeoutMs)"
 
     companion object {
         const val DEFAULT_HOST = "127.0.0.1"
@@ -59,6 +68,7 @@ data class AppConfig(
         const val DEFAULT_SERVICE_NAME = "nexora-saas-api"
         const val DEFAULT_SHUTDOWN_GRACE_MS = 1_000L
         const val DEFAULT_SHUTDOWN_TIMEOUT_MS = 5_000L
+        private val LOOPBACK_HOSTS = setOf("127.0.0.1", "localhost", "::1", "[::1]")
 
         fun fromEnv(env: Map<String, String> = System.getenv()): AppConfig {
             val environment = AppEnvironment.parse(env["NEXORA_ENV"] ?: AppEnvironment.LOCAL.wireName)
@@ -69,6 +79,7 @@ data class AppConfig(
             val readinessToken = env["NEXORA_READINESS_TOKEN"]?.trim()?.takeIf { it.isNotEmpty() }
             val graceMs = parseLong(env["NEXORA_SHUTDOWN_GRACE_MS"], DEFAULT_SHUTDOWN_GRACE_MS, "NEXORA_SHUTDOWN_GRACE_MS")
             val timeoutMs = parseLong(env["NEXORA_SHUTDOWN_TIMEOUT_MS"], DEFAULT_SHUTDOWN_TIMEOUT_MS, "NEXORA_SHUTDOWN_TIMEOUT_MS")
+            val auth = parseAuthConfig(env, environment)
 
             return AppConfig(
                 environment = environment,
@@ -79,7 +90,109 @@ data class AppConfig(
                 readinessToken = readinessToken,
                 shutdownGracePeriodMs = graceMs,
                 shutdownTimeoutMs = timeoutMs,
+                auth = auth,
             )
+        }
+
+        private fun parseAuthConfig(env: Map<String, String>, environment: AppEnvironment): JwtAuthConfig? {
+            val issuer = env["NEXORA_AUTH_ISSUER"]?.trim()?.takeIf { it.isNotEmpty() }
+            val jwksUrlRaw = env["NEXORA_AUTH_JWKS_URL"]?.trim()?.takeIf { it.isNotEmpty() }
+
+            if (issuer == null && jwksUrlRaw == null) {
+                require(!environment.isRestricted) {
+                    "NEXORA_AUTH_ISSUER and NEXORA_AUTH_JWKS_URL are required in ${environment.wireName} environment"
+                }
+                return null
+            }
+
+            require(issuer != null && jwksUrlRaw != null) {
+                "Both NEXORA_AUTH_ISSUER and NEXORA_AUTH_JWKS_URL must be configured together"
+            }
+
+            val jwksUri = try {
+                URI(jwksUrlRaw)
+            } catch (_: Exception) {
+                throw IllegalArgumentException("Invalid NEXORA_AUTH_JWKS_URL '$jwksUrlRaw'")
+            }
+
+            val audience = env["NEXORA_AUTH_AUDIENCE"]?.trim()?.takeIf { it.isNotEmpty() }
+                ?: JwtAuthConfig.DEFAULT_AUDIENCE
+            val allowedAlgorithms = parseAllowedAlgorithms(env["NEXORA_AUTH_ALLOWED_ALGS"])
+            val allowAnonymous = parseBoolean(env["NEXORA_AUTH_ALLOW_ANONYMOUS"], false, "NEXORA_AUTH_ALLOW_ANONYMOUS")
+            val clockSkewSeconds = parseLong(
+                env["NEXORA_AUTH_CLOCK_SKEW_SECONDS"],
+                JwtAuthConfig.DEFAULT_CLOCK_SKEW_SECONDS,
+                "NEXORA_AUTH_CLOCK_SKEW_SECONDS",
+            )
+            val cacheTtlSeconds = parseLong(
+                env["NEXORA_AUTH_JWKS_CACHE_TTL_SECONDS"],
+                JwtAuthConfig.DEFAULT_JWKS_CACHE_TTL_SECONDS,
+                "NEXORA_AUTH_JWKS_CACHE_TTL_SECONDS",
+            )
+            val minRefreshSeconds = parseLong(
+                env["NEXORA_AUTH_JWKS_MIN_REFRESH_SECONDS"],
+                JwtAuthConfig.DEFAULT_JWKS_MIN_REFRESH_SECONDS,
+                "NEXORA_AUTH_JWKS_MIN_REFRESH_SECONDS",
+            )
+            val timeoutMs = parseLong(
+                env["NEXORA_AUTH_JWKS_TIMEOUT_MS"],
+                JwtAuthConfig.DEFAULT_JWKS_TIMEOUT_MS,
+                "NEXORA_AUTH_JWKS_TIMEOUT_MS",
+            )
+
+            return JwtAuthConfig(
+                issuer = issuer,
+                audience = audience,
+                jwksUri = jwksUri,
+                allowedAlgorithms = allowedAlgorithms,
+                allowAnonymous = allowAnonymous,
+                clockSkewSeconds = clockSkewSeconds,
+                jwksCacheTtlSeconds = cacheTtlSeconds,
+                jwksMinRefreshSeconds = minRefreshSeconds,
+                jwksTimeoutMs = timeoutMs,
+            )
+        }
+
+        private fun parseAllowedAlgorithms(raw: String?): Set<String> {
+            if (raw.isNullOrBlank()) return JwtAuthConfig.DEFAULT_ALLOWED_ALGORITHMS
+            return raw.split(",")
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .toSet()
+        }
+
+        private fun parseBoolean(raw: String?, defaultValue: Boolean, name: String): Boolean {
+            if (raw.isNullOrBlank()) return defaultValue
+            return when (raw.trim().lowercase()) {
+                "true" -> true
+                "false" -> false
+                else -> throw IllegalArgumentException("$name must be 'true' or 'false', got '$raw'")
+            }
+        }
+
+        private fun validateAuthTransport(auth: JwtAuthConfig, environment: AppEnvironment) {
+            validateEndpointUri(auth.jwksUri, "NEXORA_AUTH_JWKS_URL", environment)
+            val issuerUri = try {
+                URI(auth.issuer)
+            } catch (_: Exception) {
+                throw IllegalArgumentException("NEXORA_AUTH_ISSUER must be a valid HTTP(S) URI")
+            }
+            validateEndpointUri(issuerUri, "NEXORA_AUTH_ISSUER", environment)
+        }
+
+        private fun validateEndpointUri(uri: URI, name: String, environment: AppEnvironment) {
+            val scheme = uri.scheme?.lowercase()
+            val host = uri.host?.lowercase()
+            require(scheme == "https" || scheme == "http") {
+                "$name must use https (or loopback http in local/test)"
+            }
+            require(!host.isNullOrBlank()) { "$name must include a valid host" }
+            require(uri.rawUserInfo == null) { "$name must not embed credentials" }
+            if (scheme == "http") {
+                require(!environment.isRestricted && host in LOOPBACK_HOSTS) {
+                    "$name must use https outside local/test loopback"
+                }
+            }
         }
 
         private fun parseInt(raw: String?, defaultValue: Int, name: String): Int {
