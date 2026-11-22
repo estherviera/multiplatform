@@ -2,6 +2,7 @@ package com.nexora.backend.bootstrap
 
 import com.nexora.backend.adapter.auth.GlobalAdminAuthConfig
 import com.nexora.backend.adapter.auth.JwtAuthConfig
+import com.nexora.backend.adapter.http.ktor.ClientIpResolver
 import com.nexora.backend.adapter.persistence.postgres.DatabaseConfig
 import com.nexora.backend.adapter.persistence.postgres.PlatformDatabaseConfig
 import com.nexora.backend.application.auth.GlobalAdminPolicyConfig
@@ -44,6 +45,7 @@ data class AppConfig(
     val platformDatabase: PlatformDatabaseConfig? = null,
     val platformRateLimitMaxRequests: Int = PlatformRateLimiter.DEFAULT_MAX_REQUESTS_PER_CALLER,
     val platformRateLimitWindowSeconds: Long = PlatformRateLimiter.DEFAULT_WINDOW.seconds,
+    val trustedProxies: Set<String> = emptySet(),
 ) {
     init {
         require(host.isNotBlank()) { "NEXORA_HOST must not be blank" }
@@ -59,6 +61,7 @@ data class AppConfig(
         require(platformRateLimitWindowSeconds in 1..3_600) {
             "NEXORA_PLATFORM_RATE_LIMIT_WINDOW_SECONDS must be between 1 and 3600"
         }
+        trustedProxies.forEach { ClientIpResolver.parseAndValidateProxyIp(it) }
         corsAllowedOrigins.forEach { validateOrigin(it) }
         if (environment.isRestricted) {
             require(!readinessToken.isNullOrBlank()) {
@@ -130,6 +133,7 @@ data class AppConfig(
                 PlatformRateLimiter.DEFAULT_WINDOW.seconds,
                 "NEXORA_PLATFORM_RATE_LIMIT_WINDOW_SECONDS",
             )
+            val trustedProxies = parseTrustedProxies(env["NEXORA_TRUSTED_PROXIES"])
 
             return AppConfig(
                 environment = environment,
@@ -146,7 +150,17 @@ data class AppConfig(
                 platformDatabase = platformDatabase,
                 platformRateLimitMaxRequests = platformRateLimitMaxRequests,
                 platformRateLimitWindowSeconds = platformRateLimitWindowSeconds,
+                trustedProxies = trustedProxies,
             )
+        }
+
+        private fun parseTrustedProxies(raw: String?): Set<String> {
+            if (raw.isNullOrBlank()) return emptySet()
+            return raw.split(",")
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .map { ClientIpResolver.parseAndValidateProxyIp(it) }
+                .toSet()
         }
 
         private fun parsePlatformDatabaseConfig(

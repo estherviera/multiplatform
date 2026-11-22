@@ -1,5 +1,6 @@
 package com.nexora.backend.application.platform
 
+import com.fasterxml.jackson.databind.ObjectMapper
 import com.nexora.backend.application.multitenant.DomainConflictException
 import com.nexora.backend.application.multitenant.DomainValidationException
 import com.nexora.backend.application.multitenant.ValidationViolation
@@ -53,11 +54,15 @@ interface PlatformCompanyRepository {
 data class RateLimitDecision(
     val allowed: Boolean,
     val retryAfterSeconds: Long = 0L,
+    val shouldAuditViolation: Boolean = false,
 )
 
 /**
  * Thread-safe sliding-window rate limiter protecting sensitive platform endpoints
- * against abusive retries and brute-force attempts (both per-caller and global buckets).
+ * against abusive retries and brute-force attempts (both per-source and global buckets).
+ *
+ * Also deduplicates rate-limit audit emissions per source per window (`shouldAuditViolation`)
+ * so an unauthenticated flood cannot exhaust the platform DB pool or flood `audit_events`.
  */
 class PlatformRateLimiter(
     private val maxRequestsPerCaller: Int = DEFAULT_MAX_REQUESTS_PER_CALLER,
@@ -68,6 +73,8 @@ class PlatformRateLimiter(
     private val lock = Any()
     private val globalTimestamps = ArrayDeque<Instant>()
     private val callerTimestamps = LinkedHashMap<String, ArrayDeque<Instant>>()
+    private val lastAuditedViolationByCaller = LinkedHashMap<String, Instant>()
+    private val globalAuditViolations = ArrayDeque<Instant>()
 
     init {
         require(maxRequestsPerCaller in 1..1_000) { "maxRequestsPerCaller must be between 1 and 1000" }
@@ -87,7 +94,11 @@ class PlatformRateLimiter(
         if (globalTimestamps.size >= maxGlobalRequests) {
             val oldest = globalTimestamps.peekFirst() ?: now
             val retryAfter = maxOf(1L, Duration.between(now, oldest.plus(window)).seconds + 1L)
-            return@synchronized RateLimitDecision(allowed = false, retryAfterSeconds = retryAfter)
+            return@synchronized RateLimitDecision(
+                allowed = false,
+                retryAfterSeconds = retryAfter,
+                shouldAuditViolation = shouldEmitViolationAudit(callerKey, now, cutoff),
+            )
         }
 
         if (callerTimestamps.size > MAX_TRACKED_CALLERS) {
@@ -108,12 +119,36 @@ class PlatformRateLimiter(
         if (deque.size >= maxRequestsPerCaller) {
             val oldest = deque.peekFirst() ?: now
             val retryAfter = maxOf(1L, Duration.between(now, oldest.plus(window)).seconds + 1L)
-            return@synchronized RateLimitDecision(allowed = false, retryAfterSeconds = retryAfter)
+            return@synchronized RateLimitDecision(
+                allowed = false,
+                retryAfterSeconds = retryAfter,
+                shouldAuditViolation = shouldEmitViolationAudit(callerKey, now, cutoff),
+            )
         }
 
         globalTimestamps.addLast(now)
         deque.addLast(now)
-        RateLimitDecision(allowed = true, retryAfterSeconds = 0L)
+        RateLimitDecision(allowed = true, retryAfterSeconds = 0L, shouldAuditViolation = false)
+    }
+
+    private fun shouldEmitViolationAudit(callerKey: String, now: Instant, cutoff: Instant): Boolean {
+        evictExpired(globalAuditViolations, cutoff)
+        if (globalAuditViolations.size >= MAX_VIOLATION_AUDITS_PER_WINDOW) {
+            return false
+        }
+        val lastForCaller = lastAuditedViolationByCaller[callerKey]
+        if (lastForCaller != null && lastForCaller.isAfter(cutoff)) {
+            return false
+        }
+        if (lastAuditedViolationByCaller.size > MAX_TRACKED_CALLERS) {
+            lastAuditedViolationByCaller.entries.removeIf { !it.value.isAfter(cutoff) }
+            while (lastAuditedViolationByCaller.size > MAX_TRACKED_CALLERS && lastAuditedViolationByCaller.isNotEmpty()) {
+                lastAuditedViolationByCaller.remove(lastAuditedViolationByCaller.keys.first())
+            }
+        }
+        lastAuditedViolationByCaller[callerKey] = now
+        globalAuditViolations.addLast(now)
+        return true
     }
 
     private fun evictExpired(deque: ArrayDeque<Instant>, cutoff: Instant) {
@@ -127,6 +162,7 @@ class PlatformRateLimiter(
         const val DEFAULT_MAX_GLOBAL_REQUESTS = 30
         val DEFAULT_WINDOW: Duration = Duration.ofSeconds(60)
         private const val MAX_TRACKED_CALLERS = 512
+        private const val MAX_VIOLATION_AUDITS_PER_WINDOW = 20
     }
 }
 
@@ -163,7 +199,7 @@ class PlatformCompanyService(
                 targetId = validated.slug,
                 outcome = "failed",
                 correlationId = correlationId,
-                metadataJson = """{"reason":"${escapeJson(conflict.code)}","idempotencyKey":"${escapeJson(validated.idempotencyKey)}"}""",
+                metadataJson = jsonObject("reason" to conflict.code, "idempotencyKey" to validated.idempotencyKey),
             )
             throw conflict
         } catch (validation: DomainValidationException) {
@@ -174,7 +210,7 @@ class PlatformCompanyService(
                 targetId = validated.slug,
                 outcome = "failed",
                 correlationId = correlationId,
-                metadataJson = """{"reason":"validation_failed","idempotencyKey":"${escapeJson(validated.idempotencyKey)}"}""",
+                metadataJson = jsonObject("reason" to "validation_failed", "idempotencyKey" to validated.idempotencyKey),
             )
             throw validation
         }
@@ -191,7 +227,7 @@ class PlatformCompanyService(
             targetId = "create",
             outcome = "denied",
             correlationId = correlationId,
-            metadataJson = """{"reason":"${escapeJson(reasonCode)}"}""",
+            metadataJson = jsonObject("reason" to reasonCode.take(64)),
         )
     }
 
@@ -205,7 +241,7 @@ class PlatformCompanyService(
             targetId = "create",
             outcome = "denied",
             correlationId = correlationId,
-            metadataJson = """{"reason":"rate_limit_exceeded"}""",
+            metadataJson = jsonObject("reason" to "rate_limit_exceeded"),
         )
     }
 
@@ -220,7 +256,7 @@ class PlatformCompanyService(
             targetId = "create",
             outcome = "failed",
             correlationId = correlationId,
-            metadataJson = """{"reason":"${escapeJson(reason.take(64))}"}""",
+            metadataJson = jsonObject("reason" to reason.take(64)),
         )
     }
 
@@ -313,8 +349,8 @@ class PlatformCompanyService(
         return digest.joinToString("") { "%02x".format(it) }
     }
 
-    private fun escapeJson(value: String): String =
-        value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "").replace("\r", "")
+    private fun jsonObject(vararg entries: Pair<String, String>): String =
+        jsonMapper.writeValueAsString(entries.toMap())
 
     companion object {
         const val MIN_SLUG_LENGTH = 2
@@ -323,6 +359,7 @@ class PlatformCompanyService(
         val SLUG_REGEX = Regex("^[a-z0-9]+(?:-[a-z0-9]+)*$")
         val IDEMPOTENCY_KEY_REGEX = Regex("^[A-Za-z0-9._:-]{1,128}$")
 
+        private val jsonMapper = ObjectMapper()
         private val logger = LoggerFactory.getLogger("com.nexora.backend.application.platform.PlatformCompanyService")
     }
 }

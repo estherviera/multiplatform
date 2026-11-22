@@ -54,6 +54,7 @@ fun Application.nexoraSaasModule(
         maxGlobalRequests = maxOf(config.platformRateLimitMaxRequests * 3, PlatformRateLimiter.DEFAULT_MAX_GLOBAL_REQUESTS),
         window = Duration.ofSeconds(config.platformRateLimitWindowSeconds),
     ),
+    clientIpResolver: ClientIpResolver = ClientIpResolver(config.trustedProxies),
     additionalRoutes: Route.() -> Unit = {},
 ) {
     install(CallId) {
@@ -108,7 +109,7 @@ fun Application.nexoraSaasModule(
         registerIdentityRoutes()
         registerMultitenantRoutes(profileService, companyQueryService)
         registerMembershipManagementRoutes(membershipManagementService)
-        registerPlatformCompanyRoutes(globalAdminAuthorizer, platformCompanyService, platformRateLimiter)
+        registerPlatformCompanyRoutes(globalAdminAuthorizer, platformCompanyService, platformRateLimiter, clientIpResolver)
         additionalRoutes()
     }
 }

@@ -1,5 +1,8 @@
 package com.nexora.backend.adapter.http.ktor
 
+import com.fasterxml.jackson.databind.DeserializationFeature
+import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.module.kotlin.KotlinModule
 import com.nexora.backend.application.auth.GlobalAdminAuthorizer
 import com.nexora.backend.application.multitenant.DomainValidationException
 import com.nexora.backend.application.multitenant.ValidationViolation
@@ -11,12 +14,23 @@ import com.nexora.backend.domain.auth.GlobalAdminDenialReason
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.plugins.callid.callId
-import io.ktor.server.request.receive
+import io.ktor.server.request.contentLength
+import io.ktor.server.request.receiveChannel
 import io.ktor.server.response.header
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.post
+import io.ktor.utils.io.readAvailable
+import java.io.ByteArrayOutputStream
+import java.nio.charset.StandardCharsets
 import java.util.UUID
+
+private const val MAX_PLATFORM_REQUEST_BYTES = 8_192
+
+private val platformRequestMapper = ObjectMapper()
+    .registerModule(KotlinModule.Builder().build())
+    .enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+    .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
 
 data class PlatformCreateCompanyRequest(
     val slug: String? = null,
@@ -34,20 +48,23 @@ fun Route.registerPlatformCompanyRoutes(
     globalAdminAuthorizer: GlobalAdminAuthorizer,
     platformCompanyService: PlatformCompanyService?,
     rateLimiter: PlatformRateLimiter,
+    clientIpResolver: ClientIpResolver = ClientIpResolver(),
 ) {
     post("/api/v1/platform/companies") {
         call.response.header(HttpHeaders.CacheControl, "no-store")
-        val rawHeader = call.request.headers[HttpHeaders.Authorization]
-        val rawBearer = extractPlatformBearerToken(rawHeader)
 
         // 1. Apply rate limiting BEFORE expensive cryptographic / Auth / DB work.
-        //    Keyed strictly by the actual network peer address (`local.remoteAddress`), ignoring
-        //    client-controlled headers (`Authorization`, `X-Forwarded-For`, `Idempotency-Key`)
-        //    so rotating fake tokens or spoofing proxy headers cannot bypass per-source limits.
-        val callerBucket = call.request.local.remoteAddress.ifBlank { "unknown-peer" }
+        //    Uses direct TCP peer unless peer is an explicitly configured trusted proxy.
+        val callerBucket = clientIpResolver.resolve(
+            peerAddress = call.request.local.remoteAddress,
+            xForwardedForHeaders = call.request.headers.getAll(HttpHeaders.XForwardedFor).orEmpty(),
+            forwardedHeaders = call.request.headers.getAll(HttpHeaders.Forwarded).orEmpty(),
+        )
         val rateDecision = rateLimiter.tryAcquire(callerBucket)
         if (!rateDecision.allowed) {
-            platformCompanyService?.recordRateLimitAudit(call.callId)
+            if (rateDecision.shouldAuditViolation) {
+                platformCompanyService?.recordRateLimitAudit(call.callId)
+            }
             call.response.header(HttpHeaders.RetryAfter, rateDecision.retryAfterSeconds.toString())
             call.respond(
                 HttpStatusCode.TooManyRequests,
@@ -62,6 +79,11 @@ fun Route.registerPlatformCompanyRoutes(
             return@post
         }
 
+        // Reject ambiguous duplicate Authorization headers (HTTP header smuggling defense).
+        val authHeaders = call.request.headers.getAll(HttpHeaders.Authorization).orEmpty()
+        val rawHeader = if (authHeaders.size == 1) authHeaders.first() else null
+        val rawBearer = if (authHeaders.size > 1) null else extractPlatformBearerToken(rawHeader)
+
         // 2. Strict global administrator verification:
         //    NEXORA_GLOBAL_ADMIN_SUB + JWT crypto + live Supabase Auth /user + MFA aal2 + fresh amr.
         val globalAdmin = when (
@@ -74,7 +96,7 @@ fun Route.registerPlatformCompanyRoutes(
             is GlobalAdminAuthorizationResult.Authorized -> authResult.principal
             is GlobalAdminAuthorizationResult.Denied -> {
                 platformCompanyService?.recordDenialAudit(authResult.reason.name, call.callId)
-                respondGlobalAdminDenial(call, authResult.reason, rawHeader)
+                respondGlobalAdminDenial(call, authResult.reason, if (authHeaders.isEmpty()) null else "present")
                 return@post
             }
             is GlobalAdminAuthorizationResult.Unavailable -> {
@@ -92,9 +114,27 @@ fun Route.registerPlatformCompanyRoutes(
             message = "Platform company executor is not configured",
         )
 
-        // 4. Validate Idempotency-Key and strict JSON DTO before touching the database.
-        val idempotencyKey = call.request.headers["Idempotency-Key"]
-        val body = call.receive<PlatformCreateCompanyRequest>()
+        // 4. Reject ambiguous duplicate Idempotency-Key headers and enforce bounded JSON body size.
+        val idempotencyHeaders = call.request.headers.getAll("Idempotency-Key").orEmpty()
+        if (idempotencyHeaders.size > 1) {
+            throw DomainValidationException(
+                listOf(ValidationViolation("Idempotency-Key", "must not be supplied more than once")),
+            )
+        }
+        val idempotencyKey = idempotencyHeaders.firstOrNull()
+
+        val declaredLength = call.request.contentLength()
+        if (declaredLength != null && declaredLength > MAX_PLATFORM_REQUEST_BYTES) {
+            throw PayloadTooLargeApiException(
+                code = "payload_too_large",
+                message = "Request body exceeds maximum allowed size",
+            )
+        }
+        val rawBytes = readBoundedRequestBytes(call.receiveChannel(), MAX_PLATFORM_REQUEST_BYTES)
+        val body = platformRequestMapper.readValue(
+            String(rawBytes, StandardCharsets.UTF_8),
+            PlatformCreateCompanyRequest::class.java,
+        )
         val initialAdminId = parseCanonicalPlatformUuid(body.initialAdminUserId)
             ?: throw DomainValidationException(
                 listOf(ValidationViolation("initialAdminUserId", "must be a valid canonical UUID")),
@@ -232,4 +272,27 @@ private fun parseCanonicalPlatformUuid(raw: String?): UUID? {
     } catch (_: IllegalArgumentException) {
         null
     }
+}
+
+private suspend fun readBoundedRequestBytes(
+    channel: io.ktor.utils.io.ByteReadChannel,
+    maxBytes: Int,
+): ByteArray {
+    val out = ByteArrayOutputStream()
+    val buf = ByteArray(2048)
+    var total = 0
+    while (!channel.isClosedForRead) {
+        val read = channel.readAvailable(buf, 0, buf.size)
+        if (read == -1) break
+        if (read == 0) continue
+        total += read
+        if (total > maxBytes) {
+            throw PayloadTooLargeApiException(
+                code = "payload_too_large",
+                message = "Request body exceeds maximum allowed size",
+            )
+        }
+        out.write(buf, 0, read)
+    }
+    return out.toByteArray()
 }
