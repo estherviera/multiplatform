@@ -43,6 +43,8 @@ Con el servidor arrancado, puedes abrir [el estado del servidor](http://127.0.0.
 
 ## Próxima etapa
 
+La preparación del backend SaaS, las decisiones aceptadas y los resultados de verificación están en el [informe previo a la Fase 1](docs/preparacion-fase-1.md). El entorno PostgreSQL desechable tiene una [guía independiente](docs/postgres-local.md).
+
 1. Implementar el registro, el inicio de sesión y las sesiones en la API.
 2. Asociar comunidades con propietarios y miembros, y proteger las operaciones de edición y borrado.
 3. Añadir publicaciones y comentarios, y conectar los clientes con la API.

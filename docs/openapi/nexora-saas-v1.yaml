@@ -1,0 +1,181 @@
+openapi: 3.0.3
+info:
+  title: Nexora SaaS API
+  version: 0.1.0-alpha
+  description: >
+    Contrato OpenAPI mínimo del incremento 1A (Fase 1) del backend Ktor SaaS de Nexora.
+    Incluye endpoints de salud (liveness y readiness) y el formato estándar de errores HTTP.
+    La autenticación JWT, el acceso a PostgreSQL/JDBC, RLS y las rutas de negocio se añadirán en incrementos posteriores.
+servers:
+  - url: http://127.0.0.1:8080
+    description: Entorno local de desarrollo Ktor SaaS
+tags:
+  - name: Health
+    description: Comprobaciones operativas de liveness y readiness
+paths:
+  /health/live:
+    get:
+      tags:
+        - Health
+      summary: Comprobación pública mínima de liveness
+      description: Indica que el proceso HTTP de Ktor está activo y respondiendo solicitudes.
+      operationId: getLiveness
+      responses:
+        '200':
+          description: Servicio activo
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LivenessResponse'
+              example:
+                status: ok
+  /health/ready:
+    get:
+      tags:
+        - Health
+      summary: Comprobación operativa de readiness
+      description: >
+        Evalúa si el servicio está listo para recibir tráfico.
+        Cuando `NEXORA_READINESS_TOKEN` está configurado (obligatorio en staging y production),
+        requiere la cabecera `X-Nexora-Readiness-Token`.
+      operationId: getReadiness
+      security:
+        - {}
+        - ReadinessToken: []
+      responses:
+        '200':
+          description: Servicio listo para recibir tráfico
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessResponse'
+              example:
+                status: ready
+                service: nexora-saas-api
+                environment: local
+                checks: {}
+        '401':
+          description: Token operativo de readiness ausente o inválido
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  code: invalid_readiness_token
+                  message: Unauthorized readiness check
+                  requestId: 3d2f8e4a-8c5a-4d7c-9b2a-9e2e5c1a4f10
+        '503':
+          description: Servicio no listo (uno o más checks fallaron)
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessResponse'
+              example:
+                status: not_ready
+                service: nexora-saas-api
+                environment: local
+                checks:
+                  database: not_ready
+components:
+  securitySchemes:
+    ReadinessToken:
+      type: apiKey
+      in: header
+      name: X-Nexora-Readiness-Token
+      description: Token operativo para proteger /health/ready en entornos restringidos.
+  headers:
+    XRequestId:
+      description: Identificador de correlación de la solicitud HTTP.
+      schema:
+        type: string
+  schemas:
+    LivenessResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum:
+            - ok
+    ReadinessResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - status
+        - service
+        - environment
+        - checks
+      properties:
+        status:
+          type: string
+          enum:
+            - ready
+            - not_ready
+        service:
+          type: string
+        environment:
+          type: string
+          enum:
+            - local
+            - test
+            - staging
+            - production
+        checks:
+          type: object
+          additionalProperties:
+            type: string
+            enum:
+              - ok
+              - not_ready
+    FieldError:
+      type: object
+      additionalProperties: false
+      required:
+        - field
+        - reason
+      properties:
+        field:
+          type: string
+        reason:
+          type: string
+    ErrorDetail:
+      type: object
+      additionalProperties: false
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        requestId:
+          type: string
+          nullable: true
+        details:
+          type: array
+          items:
+            $ref: '#/components/schemas/FieldError'
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - error
+      properties:
+        error:
+          $ref: '#/components/schemas/ErrorDetail'

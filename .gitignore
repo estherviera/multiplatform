@@ -13,3 +13,22 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Instrucciones y herramientas locales de agentes
+.agents/
+.codex/
+AGENTS.md
+
+# Documentación técnica revisable. Los binarios y ficheros locales quedan fuera.
+/docs/*
+!/docs/*.md
+!/docs/decisions/
+/docs/decisions/*
+!/docs/decisions/*.md
+!/docs/openapi/
+/docs/openapi/*
+!/docs/openapi/*.yaml
+
+# Variables de entorno locales
+.env
+.env.*
