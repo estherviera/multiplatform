@@ -158,6 +158,7 @@ try {
 
 **Migraciones aplicadas en el esquema `nexora`:**
 - `V1__init_identity_context.sql` (Fase 1C): función `nexora.current_user_id()` (`SECURITY INVOKER`, sin tablas de negocio).
-- `V2__create_multitenant_core_tables.sql` (Fase 2A): tablas iniciales multiempresa `nexora.profiles`, `nexora.companies` y `nexora.company_memberships` con FKs `ON DELETE RESTRICT`, restricciones, índices, trigger diferido de continuidad de administrador activo y RLS habilitado con denegación por defecto (sin grants a `app_runtime` ni políticas permisivas).
+- `V2__create_multitenant_core_tables.sql` (Fase 2A): tablas iniciales multiempresa `nexora.profiles`, `nexora.companies` y `nexora.company_memberships` con FKs `ON DELETE RESTRICT`, restricciones, índices, trigger diferido de continuidad de administrador activo y RLS habilitado con denegación por defecto.
+- `V3__multitenant_rls_policies_and_grants.sql` (Fase 2B): funciones auxiliares booleanas de alcance mínimo (`nexora.is_active_company_member(uuid)`, `nexora.is_active_company_admin(uuid)`), corrección `SECURITY DEFINER` del trigger `nexora.enforce_company_has_active_admin()` para funcionar bajo RLS real, privilegios mínimos por tabla/columna para `app_runtime`, políticas RLS explícitas (`USING`/`WITH CHECK`) y revocación explícita para `PUBLIC`, `anon` y `authenticated`.
 
-**Pendiente de incrementos posteriores:** políticas RLS reales, grants granulares y pruebas de aislamiento A/B entre empresas (`2B`), rutas de gestión empresarial y alta de plataforma auditada (`2B`/`2C`), comprobación en servidor de vigencia de sesión/MFA y configuración de despliegue remoto/CI.
+**Pendiente de incrementos posteriores:** gestión segura de empresas y membresías en API, alta global de plataforma con MFA `aal2` y auditoría durable (`2C`), pruebas de administración/auditoría `T19` y configuración de despliegue remoto/CI.

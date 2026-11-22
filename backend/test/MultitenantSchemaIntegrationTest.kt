@@ -80,9 +80,9 @@ class MultitenantSchemaIntegrationTest {
         val migrator = runFlyway()
 
         val validation = migrator.validate()
-        assertTrue(validation.validationSuccessful, "Flyway validation must succeed across V1 and V2")
+        assertTrue(validation.validationSuccessful, "Flyway validation must succeed across applied migrations")
         val versions = migrator.info().mapNotNull { it.version?.version }
-        assertEquals(listOf("1", "2"), versions)
+        assertTrue(listOf("1", "2").all { it in versions }, "Expected at least V1 and V2 in Flyway history")
 
         openMigratorConnection().use { conn ->
             conn.createStatement().use { stmt ->
@@ -102,13 +102,12 @@ class MultitenantSchemaIntegrationTest {
                     )
                 }
 
-                // 2. RLS enabled, owner = app_migrator, zero permissive policies (default deny)
+                // 2. RLS enabled and owner = app_migrator on all 3 multitenant tables
                 stmt.executeQuery(
                     """
                     SELECT c.relname,
                            c.relrowsecurity,
-                           pg_get_userbyid(c.relowner) AS owner,
-                           (SELECT count(*) FROM pg_policies p WHERE p.schemaname = 'nexora' AND p.tablename = c.relname) AS policy_count
+                           pg_get_userbyid(c.relowner) AS owner
                     FROM pg_class c
                     JOIN pg_namespace n ON n.oid = c.relnamespace
                     WHERE n.nspname = 'nexora'
@@ -122,20 +121,17 @@ class MultitenantSchemaIntegrationTest {
                         checked.add(table)
                         assertTrue(rs.getBoolean(2), "RLS must be enabled on nexora.$table")
                         assertEquals("app_migrator", rs.getString(3), "Owner of nexora.$table must be app_migrator")
-                        assertEquals(0, rs.getInt(4), "Phase 2A must have 0 permissive policies on nexora.$table")
                     }
                     assertEquals(listOf("companies", "company_memberships", "profiles"), checked)
                 }
 
-                // 3. Zero table privileges granted to PUBLIC or app_runtime in Phase 2A
+                // 3. PUBLIC has zero table privileges and app_runtime has no DELETE or companies INSERT
                 stmt.executeQuery(
                     """
                     SELECT c.relname,
-                           has_table_privilege('app_runtime', c.oid, 'SELECT'),
-                           has_table_privilege('app_runtime', c.oid, 'INSERT'),
-                           has_table_privilege('app_runtime', c.oid, 'UPDATE'),
                            has_table_privilege('app_runtime', c.oid, 'DELETE'),
-                           has_table_privilege('public', c.oid, 'SELECT')
+                           has_table_privilege('public', c.oid, 'SELECT'),
+                           has_table_privilege('app_runtime', 'nexora.companies', 'INSERT')
                     FROM pg_class c
                     JOIN pg_namespace n ON n.oid = c.relnamespace
                     WHERE n.nspname = 'nexora'
@@ -145,11 +141,9 @@ class MultitenantSchemaIntegrationTest {
                 ).use { rs ->
                     while (rs.next()) {
                         val table = rs.getString(1)
-                        assertFalse(rs.getBoolean(2), "app_runtime must not have SELECT on nexora.$table in 2A")
-                        assertFalse(rs.getBoolean(3), "app_runtime must not have INSERT on nexora.$table in 2A")
-                        assertFalse(rs.getBoolean(4), "app_runtime must not have UPDATE on nexora.$table in 2A")
-                        assertFalse(rs.getBoolean(5), "app_runtime must not have DELETE on nexora.$table in 2A")
-                        assertFalse(rs.getBoolean(6), "PUBLIC must not have SELECT on nexora.$table")
+                        assertFalse(rs.getBoolean(2), "app_runtime must never have DELETE on nexora.$table")
+                        assertFalse(rs.getBoolean(3), "PUBLIC must never have SELECT on nexora.$table")
+                        assertFalse(rs.getBoolean(4), "app_runtime must never have INSERT on nexora.companies")
                     }
                 }
 
@@ -229,11 +223,11 @@ class MultitenantSchemaIntegrationTest {
                 expiresAt = Instant.now().plusSeconds(3600),
             )
 
+            // Operations forbidden at the SQL GRANT layer even after Phase 2B RLS grants
             val forbiddenStatements = listOf(
-                "SELECT * FROM nexora.profiles",
-                "SELECT * FROM nexora.companies",
-                "SELECT * FROM nexora.company_memberships",
                 "INSERT INTO nexora.companies (slug, name) VALUES ('acme', 'Acme')",
+                "DELETE FROM nexora.profiles",
+                "DELETE FROM nexora.companies",
                 "DELETE FROM nexora.company_memberships",
                 "ALTER TABLE nexora.companies DISABLE ROW LEVEL SECURITY",
             )
@@ -245,6 +239,19 @@ class MultitenantSchemaIntegrationTest {
                     }
                 }
                 assertEquals("42501", err.sqlState, "Expected insufficient_privilege (42501) for: $sql")
+            }
+
+            // Unrelated authenticated actor sees 0 rows via RLS across all 3 tables
+            for (table in listOf("profiles", "companies", "company_memberships")) {
+                val count = txManager.inAuthenticatedTransaction(actor, readOnly = true) { session ->
+                    session.connection.createStatement().use { st ->
+                        st.executeQuery("SELECT count(*) FROM nexora.$table").use { rs ->
+                            rs.next()
+                            rs.getInt(1)
+                        }
+                    }
+                }
+                assertEquals(0, count, "Unrelated actor must see 0 rows in nexora.$table via RLS")
             }
         }
     }
